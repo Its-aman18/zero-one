@@ -116,15 +116,35 @@ const SimulationApp: React.FC = () => {
         {normalizedView === 'live-screen' && <LiveScreenPage onNavigate={navigateTo} />}
         {normalizedView === 'admin-control' &&
           (isAdminVerified() ? (
-            <AdminControlCenter initialTab="OVERVIEW" onNavigate={navigateTo} />
+            <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center space-y-4">
+              <div className="w-12 h-12 rounded-2xl bg-orange-500/10 text-orange-600 flex items-center justify-center animate-spin">
+                <CodeScrietLogo size={28} />
+              </div>
+              <h2 className="text-xl font-bold font-heading">Redirecting to Admin Control Center...</h2>
+              <p className="text-xs text-stone-500">Launching separate mission control interface at /admin.html</p>
+              <a
+                href="/admin.html"
+                className="px-5 py-2.5 rounded-xl bg-orange-600 text-white font-bold text-xs hover:bg-orange-500 shadow-md transition-all"
+              >
+                Click here if not redirected automatically
+              </a>
+            </div>
           ) : (
-            <AdminAccessDeniedPage onNavigate={navigateTo} targetPath="/admin" />
+            <AdminAccessDeniedPage onNavigate={navigateTo} targetPath="/admin.html" />
           ))}
         {normalizedView === 'admin-verification' &&
           (isAdminVerified() ? (
-            <AdminControlCenter initialTab="ADMIN_VERIFICATION" onNavigate={navigateTo} />
+            <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center space-y-4">
+              <h2 className="text-xl font-bold font-heading">Redirecting to Admin Verification Center...</h2>
+              <a
+                href="/admin.html#verification"
+                className="px-5 py-2.5 rounded-xl bg-orange-600 text-white font-bold text-xs hover:bg-orange-500 shadow-md transition-all"
+              >
+                Open Admin Verification (admin.html#verification)
+              </a>
+            </div>
           ) : (
-            <AdminAccessDeniedPage onNavigate={navigateTo} targetPath="/admin/verification" />
+            <AdminAccessDeniedPage onNavigate={navigateTo} targetPath="/admin.html#verification" />
           ))}
         {normalizedView === 'canvas' && <StartupCanvasPage onNavigate={navigateTo} />}
         {normalizedView === 'inventory' && (

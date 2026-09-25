@@ -210,18 +210,14 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
 
           {/* Admin Panel button - ONLY visible if user is server-verified admin */}
           {isAdminVerified() && (
-            <button
+            <a
               id="header-nav-admin-btn"
-              onClick={() => onNavigate('admin-control')}
-              className={`px-3 py-1.5 rounded-full transition-colors flex items-center gap-1.5 ${
-                currentView === 'admin-control'
-                  ? 'text-orange-600 dark:text-orange-400 font-semibold bg-orange-500/10'
-                  : 'hover:text-orange-600 dark:hover:text-orange-400'
-              }`}
+              href="/admin.html"
+              className="px-3 py-1.5 rounded-full transition-colors flex items-center gap-1.5 text-orange-600 dark:text-orange-400 font-semibold bg-orange-500/10 hover:bg-orange-500/20"
             >
               <Shield className="w-3.5 h-3.5" />
               <span>Admin</span>
-            </button>
+            </a>
           )}
         </nav>
 
@@ -338,20 +334,17 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
 
                   {/* Direct Admin Access / Apply Button in Profile */}
                   {isAdminVerified() ? (
-                    <button
+                    <a
                       id="profile-open-admin-btn"
-                      onClick={() => {
-                        setIsRoleDropdownOpen(false);
-                        onNavigate('admin-control');
-                      }}
+                      href="/admin.html"
                       className="mt-2.5 w-full py-2 px-3 rounded-xl bg-orange-600 hover:bg-orange-500 text-white text-xs font-bold flex items-center justify-between transition-colors shadow-sm"
                     >
                       <span className="flex items-center gap-2">
                         <Shield className="w-3.5 h-3.5" />
-                        <span>Open Admin Dashboard</span>
+                        <span>Open Admin Dashboard (admin.html)</span>
                       </span>
                       <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded">Enter</span>
-                    </button>
+                    </a>
                   ) : (
                     <button
                       id="profile-apply-admin-btn"
@@ -603,19 +596,16 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
 
           {/* Mobile Admin Link - SERVER AUTHORIZATION CHECK */}
           {isAdminVerified() && (
-            <button
+            <a
               id="mobile-nav-admin-btn"
-              onClick={() => {
-                onNavigate('admin-control');
-                setIsMobileMenuOpen(false);
-              }}
+              href="/admin.html"
               className="w-full text-left py-2 px-3 rounded-lg text-sm font-semibold hover:bg-stone-100 dark:hover:bg-stone-800 text-orange-600 flex items-center justify-between"
             >
-              <span>Admin Control Center</span>
+              <span>Admin Control Center (admin.html)</span>
               <span className="text-[10px] uppercase font-bold bg-orange-500/20 text-orange-600 px-2 py-0.5 rounded-full">
                 Verified
               </span>
-            </button>
+            </a>
           )}
 
           {!isAdminVerified() && (
