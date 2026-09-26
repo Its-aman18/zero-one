@@ -1903,6 +1903,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return {
       isAuthenticated: currentRole !== 'PUBLIC',
       isVerifiedAdmin: verified,
+      authorizationLoading: false,
       loading: false,
       status,
       role: superAdmin ? 'SUPER_ADMIN' : verified ? (authRecord?.role || 'ADMIN') : 'MEMBER',

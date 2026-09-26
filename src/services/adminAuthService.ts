@@ -199,14 +199,16 @@ export const PRESET_USERS: {
 ];
 
 // =========================================================================
-// AUTHORIZATION ABSTRACTION INTERFACE (Requirement 23)
-// Clean abstraction layer ready to connect to Code.SCRIET API
+// AUTHORIZATION ABSTRACTION INTERFACE (Requirement 6 & 18)
+// TEMPORARY FRONTEND MOCK
+// REPLACE WITH CODE.SCRIET AUTHORIZATION API IN STEP 3
 // =========================================================================
 
 export interface AuthorizationState {
   isAuthenticated: boolean;
   isVerifiedAdmin: boolean;
-  loading: boolean;
+  authorizationLoading: boolean;
+  loading: boolean; // Alias for authorizationLoading
   status: AdminAuthorizationStatus;
   role?: string;
   user?: CodeScrietUser | null;
@@ -215,6 +217,7 @@ export interface AuthorizationState {
 
 /**
  * Returns the currently authenticated user from Code.SCRIET session
+ * TEMPORARY FRONTEND MOCK - REPLACE WITH CODE.SCRIET AUTHORIZATION API IN STEP 3
  */
 export function getCurrentUser(): CodeScrietUser {
   try {
@@ -228,6 +231,7 @@ export function getCurrentUser(): CodeScrietUser {
 
 /**
  * Returns the authoritative admin authorization record for an email or ID
+ * TEMPORARY FRONTEND MOCK - REPLACE WITH CODE.SCRIET AUTHORIZATION API IN STEP 3
  */
 export function getAdminAuthorization(emailOrId?: string): AdminAuthorization | undefined {
   const email = (emailOrId || getCurrentUser().email || '').toLowerCase().trim();
@@ -245,6 +249,7 @@ export function getAdminAuthorization(emailOrId?: string): AdminAuthorization | 
 
 /**
  * Evaluates whether an email/user identity has verified active administrator status
+ * TEMPORARY FRONTEND MOCK - REPLACE WITH CODE.SCRIET AUTHORIZATION API IN STEP 3
  */
 export function isVerifiedAdmin(emailOrId?: string): boolean {
   const email = (emailOrId || getCurrentUser().email || '').toLowerCase().trim();
