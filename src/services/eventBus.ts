@@ -8,6 +8,10 @@ export type SimulationEventType =
   | 'PURCHASE_PROPOSED'
   | 'PURCHASE_COMMITTED'
   | 'PURCHASE_REVERSED'
+  | 'FUNDS_UPDATED'
+  | 'PRICE_UPDATED'
+  | 'STOCK_UPDATED'
+  | 'MARKET_UPDATED'
   | 'CRISIS_DISPATCHED'
   | 'CRISIS_RESPONSE_RECEIVED'
   | 'CRISIS_TIMEOUT'
@@ -25,11 +29,12 @@ export type SimulationEventType =
   | 'ANNOUNCEMENT_BROADCAST'
   | 'EMERGENCY_OVERRIDE'
   | 'SIMULATION_RESET'
-  | 'ADMIN_APPLICATION_SUBMITTED'
-  | 'ADMIN_APPROVED'
-  | 'ADMIN_REJECTED'
+  | 'ADMIN_AUTH_UPDATED'
+  | 'ADMIN_VERIFIED'
   | 'ADMIN_SUSPENDED'
-  | 'ADMIN_REACTIVATED';
+  | 'ADMIN_REVOKED'
+  | 'ADMIN_REACTIVATED'
+  | 'CONNECTED';
 
 export interface SimulationEvent<T = any> {
   id: string;
@@ -44,21 +49,65 @@ type EventListener<T = any> = (event: SimulationEvent<T>) => void;
 
 class RealtimeEventStream {
   private channel: BroadcastChannel | null = null;
+  private eventSource: EventSource | null = null;
   private listeners: Map<SimulationEventType | '*', Set<EventListener>> = new Map();
+  private processedEventIds: Set<string> = new Set();
 
   constructor() {
+    this.initBroadcastChannel();
+    this.initServerRealtimeStream();
+  }
+
+  private initBroadcastChannel() {
     if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
       try {
         this.channel = new BroadcastChannel('zero_one_authoritative_event_bus');
         this.channel.onmessage = (event) => {
           if (event.data && event.data.type) {
-            this.notifyListeners(event.data);
+            this.handleIncomingEvent(event.data);
           }
         };
       } catch (err) {
         console.warn('BroadcastChannel initialization fallback:', err);
       }
     }
+  }
+
+  private initServerRealtimeStream() {
+    if (typeof window !== 'undefined' && typeof EventSource !== 'undefined') {
+      try {
+        this.eventSource = new EventSource('/api/realtime/stream');
+        this.eventSource.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data && data.type) {
+              this.handleIncomingEvent(data);
+            }
+          } catch (err) {
+            // Ignore parse errors on keepalive comments
+          }
+        };
+        this.eventSource.onerror = () => {
+          // Reconnection is handled automatically by EventSource
+        };
+      } catch (err) {
+        console.warn('Server SSE stream initialization fallback:', err);
+      }
+    }
+  }
+
+  private handleIncomingEvent(event: SimulationEvent) {
+    if (event.id && this.processedEventIds.has(event.id)) {
+      return; // Deduplicate
+    }
+    if (event.id) {
+      this.processedEventIds.add(event.id);
+      if (this.processedEventIds.size > 200) {
+        const first = this.processedEventIds.values().next().value;
+        if (first) this.processedEventIds.delete(first);
+      }
+    }
+    this.notifyListeners(event);
   }
 
   public emit<T = any>(type: SimulationEventType, payload: T, actor = 'SYSTEM'): SimulationEvent<T> {

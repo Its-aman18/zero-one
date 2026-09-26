@@ -4,7 +4,6 @@ import { AdminControlCenter } from './pages/AdminControlCenter';
 import { AdminAccessDeniedPage } from './pages/AdminAccessDeniedPage';
 import { LockdownOverlay } from './components/LockdownOverlay';
 import { CodeScrietLogo } from './components/CodeScrietLogo';
-import { RequestAdminModal } from './components/RequestAdminModal';
 import { Sun, Moon, ArrowLeft, Shield, ShieldCheck, LogOut } from 'lucide-react';
 
 const AdminRootApp: React.FC = () => {
@@ -34,8 +33,6 @@ const AdminRootApp: React.FC = () => {
   const [isDark, setIsDark] = useState<boolean>(() => {
     return document.documentElement.classList.contains('dark');
   });
-
-  const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
 
   // Sync tab on hash change
   useEffect(() => {
@@ -157,20 +154,11 @@ const AdminRootApp: React.FC = () => {
           <AdminAccessDeniedPage
             targetPath="/admin.html"
             onNavigate={(view) => {
-              if (view === 'request-modal') {
-                setIsApplyModalOpen(true);
-              } else {
-                window.location.href = `/#${view}`;
-              }
+              window.location.href = `/#${view}`;
             }}
           />
         )}
       </main>
-
-      {/* Request Admin Modal if triggered */}
-      {isApplyModalOpen && (
-        <RequestAdminModal isOpen={isApplyModalOpen} onClose={() => setIsApplyModalOpen(false)} />
-      )}
     </div>
   );
 };

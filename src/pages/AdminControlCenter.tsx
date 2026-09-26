@@ -44,7 +44,6 @@ import {
   SimulationRole,
   MarketItem,
   CrisisCard,
-  AdminApplication,
   AdminPermissionRole,
   AdminAuditLogEntry,
 } from '../types';
@@ -106,17 +105,17 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     resetAndReseedSimulation,
     createSnapshot,
     restoreSnapshot,
-    // Admin Verification System
+    // Admin Verification System (Super Admin Controlled)
     adminAuthorizations,
-    adminApplications,
     adminAuditLogs,
     getAdminStatus,
     isAdminVerified,
     isSuperAdmin,
-    approveAdminApplication,
-    rejectAdminApplication,
-    suspendAdminAccess,
-    reactivateAdminAccess,
+    searchUserByEmail,
+    verifyAdminByEmail,
+    suspendAdmin,
+    revokeAdmin,
+    reactivateAdmin,
   } = useSimulation();
 
   const [activeTab, setActiveTab] = useState<string>(initialTab || 'OVERVIEW');
@@ -130,14 +129,21 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
     }
   }, [initialTab]);
 
-  // Admin Verification Filter & Modal States
-  const [verificationFilter, setVerificationFilter] = useState<'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED'>('ALL');
-  const [verificationSearch, setVerificationSearch] = useState<string>('');
-  const [selectedAppForApproval, setSelectedAppForApproval] = useState<AdminApplication | null>(null);
-  const [selectedAppForRejection, setSelectedAppForRejection] = useState<AdminApplication | null>(null);
-  const [approvalRole, setApprovalRole] = useState<AdminPermissionRole>('EVENT_OPERATOR');
-  const [rejectionReasonText, setRejectionReasonText] = useState<string>('');
-  const [verificationSubTab, setVerificationSubTab] = useState<'APPLICATIONS' | 'ACTIVE_ADMINS' | 'AUDIT_TRAIL'>('APPLICATIONS');
+  // Super Admin Verification State
+  const [searchEmailInput, setSearchEmailInput] = useState('');
+  const [isSearchingUser, setIsSearchingUser] = useState(false);
+  const [searchedUser, setSearchedUser] = useState<{
+    id: string;
+    name: string;
+    email: string;
+    accountStatus?: string;
+    role: string;
+    adminStatus: string;
+    adminRole?: string | null;
+  } | null>(null);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [selectedVerifyRole, setSelectedVerifyRole] = useState<AdminPermissionRole>('ADMIN');
+  const [actionLoadingEmail, setActionLoadingEmail] = useState<string | null>(null);
 
   // Form states
   const [manualTeamId, setManualTeamId] = useState<string>(teams[0]?.id || 'team-07');
@@ -164,6 +170,106 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const handleSearchUser = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!searchEmailInput.trim()) {
+      setSearchError('Please enter an email address');
+      return;
+    }
+    setSearchError(null);
+    setIsSearchingUser(true);
+    try {
+      const res = await searchUserByEmail(searchEmailInput.trim());
+      if (res.found && res.user) {
+        setSearchedUser(res.user);
+      } else {
+        setSearchedUser(null);
+        setSearchError(res.error || 'User not found in Code.SCRIET user registry.');
+      }
+    } catch (err: any) {
+      setSearchedUser(null);
+      setSearchError(err.message || 'Failed to search user');
+    } finally {
+      setIsSearchingUser(false);
+    }
+  };
+
+  const handleVerify = async (email: string) => {
+    setActionLoadingEmail(email);
+    const res = await verifyAdminByEmail(email, selectedVerifyRole);
+    setActionLoadingEmail(null);
+    if (res.success) {
+      showToast(res.message);
+      if (searchedUser && searchedUser.email.toLowerCase() === email.toLowerCase()) {
+        setSearchedUser({
+          ...searchedUser,
+          adminStatus: 'ACTIVE',
+          adminRole: selectedVerifyRole,
+        });
+      }
+    } else {
+      alert(res.message);
+    }
+  };
+
+  const handleSuspend = async (email: string) => {
+    if (email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase()) {
+      alert('Permanent Super Admin cannot be suspended.');
+      return;
+    }
+    const reason = prompt(`Reason for suspending administrator access for ${email}:`, 'Routine operational audit suspension');
+    if (reason === null) return;
+    setActionLoadingEmail(email);
+    const res = await suspendAdmin(email, reason);
+    setActionLoadingEmail(null);
+    if (res.success) {
+      showToast(res.message);
+      if (searchedUser && searchedUser.email.toLowerCase() === email.toLowerCase()) {
+        setSearchedUser({ ...searchedUser, adminStatus: 'SUSPENDED' });
+      }
+    } else {
+      alert(res.message);
+    }
+  };
+
+  const handleRevoke = async (email: string) => {
+    if (email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase()) {
+      alert('Permanent Super Admin cannot be revoked.');
+      return;
+    }
+    const confirm = window.confirm(`Are you sure you want to REVOKE administrator access for ${email}?`);
+    if (!confirm) return;
+    const reason = prompt(`Reason for revoking admin access for ${email}:`, 'Role decommission / competition conflict');
+    if (reason === null) return;
+    setActionLoadingEmail(email);
+    const res = await revokeAdmin(email, reason);
+    setActionLoadingEmail(null);
+    if (res.success) {
+      showToast(res.message);
+      if (searchedUser && searchedUser.email.toLowerCase() === email.toLowerCase()) {
+        setSearchedUser({ ...searchedUser, adminStatus: 'REVOKED' });
+      }
+    } else {
+      alert(res.message);
+    }
+  };
+
+  const handleReactivate = async (email: string) => {
+    const reason = prompt(`Reason for reactivating administrator access for ${email}:`, 'Privileges reinstated by Super Admin');
+    if (reason === null) return;
+    setActionLoadingEmail(email);
+    const res = await reactivateAdmin(email, reason);
+    setActionLoadingEmail(null);
+    if (res.success) {
+      showToast(res.message);
+      if (searchedUser && searchedUser.email.toLowerCase() === email.toLowerCase()) {
+        setSearchedUser({ ...searchedUser, adminStatus: 'ACTIVE' });
+      }
+    } else {
+      alert(res.message);
+    }
   };
 
   const handleStateAdvance = (next: EventStatus) => {
@@ -405,23 +511,23 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
               <span>Audit Logs</span>
             </button>
 
-            <button
-              id="sidebar-admin-verification-tab"
-              onClick={() => setActiveTab('ADMIN_VERIFICATION')}
-              className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition-colors ${
-                activeTab === 'ADMIN_VERIFICATION' ? 'bg-orange-500/10 text-orange-600 font-bold' : 'hover:bg-stone-100 dark:hover:bg-stone-800'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-stone-400" />
-                <span>Admin Verification</span>
-              </div>
-              {adminApplications.filter((a) => a.status === 'PENDING').length > 0 && (
-                <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-white font-mono">
-                  {adminApplications.filter((a) => a.status === 'PENDING').length}
+            {isSuperAdmin() && (
+              <button
+                id="sidebar-admin-verification-tab"
+                onClick={() => setActiveTab('ADMIN_VERIFICATION')}
+                className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg transition-colors ${
+                  activeTab === 'ADMIN_VERIFICATION' ? 'bg-orange-500/10 text-orange-600 font-bold' : 'hover:bg-stone-100 dark:hover:bg-stone-800'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-orange-500" />
+                  <span>Admin Verification</span>
+                </div>
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-orange-500/20 text-orange-400 font-mono">
+                  SUPER
                 </span>
-              )}
-            </button>
+              </button>
+            )}
 
             <button
               onClick={() => setActiveTab('BACKUP')}
@@ -605,29 +711,29 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                 </p>
               </div>
 
-              {/* Tile 8: Admin Verification */}
-              <div
-                id="tile-admin-verification"
-                onClick={() => setActiveTab('ADMIN_VERIFICATION')}
-                className="card card-interactive p-6 space-y-3 group border border-orange-500/30 hover:border-orange-500 transition-colors"
-              >
-                <div className="w-12 h-12 rounded-2xl bg-orange-100 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400 flex items-center justify-center group-hover:scale-105 transition-transform">
-                  <ShieldCheck className="w-6 h-6" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <h3 className="font-heading font-black text-lg text-stone-900 dark:text-stone-100">
-                    Admin Verification
-                  </h3>
-                  {adminApplications.filter((a) => a.status === 'PENDING').length > 0 && (
+              {/* Tile 8: Admin Verification (Super Admin Only) */}
+              {isSuperAdmin() && (
+                <div
+                  id="tile-admin-verification"
+                  onClick={() => setActiveTab('ADMIN_VERIFICATION')}
+                  className="card card-interactive p-6 space-y-3 group border border-orange-500/30 hover:border-orange-500 transition-colors"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-orange-100 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-heading font-black text-lg text-stone-900 dark:text-stone-100">
+                      Admin Verification
+                    </h3>
                     <span className="badge badge-orange text-[10px]">
-                      {adminApplications.filter((a) => a.status === 'PENDING').length} Pending
+                      SUPER ADMIN
                     </span>
-                  )}
+                  </div>
+                  <p className="text-xs text-stone-500 dark:text-stone-400">
+                    Verify administrators by Code.SCRIET email ID and manage authorization
+                  </p>
                 </div>
-                <p className="text-xs text-stone-500 dark:text-stone-400">
-                  Review applicant credentials and manage server-side admin authorization
-                </p>
-              </div>
+              )}
             </div>
 
             {/* Quick Live Telemetry Strip */}
@@ -1320,465 +1426,348 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         )}
 
         {/* ========================================================================= */}
-        {/* TAB: ADMIN VERIFICATION & CREDENTIAL MANAGEMENT */}
+        {/* TAB: ADMIN VERIFICATION (SUPER ADMIN ONLY) */}
         {/* ========================================================================= */}
         {activeTab === 'ADMIN_VERIFICATION' && (
           <div className="space-y-6 animate-in fade-in duration-150">
-            {/* Header & Metric Badges matching Requirements */}
-            <div className="card p-6 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-2xl font-black font-heading text-stone-900 dark:text-stone-100">
-                      Admin Verification
-                    </h2>
-                    <span className="badge badge-orange text-[10px]">Server Authoritative</span>
+            {!isSuperAdmin() ? (
+              <div className="card p-8 text-center space-y-4 border-amber-500/30">
+                <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-500/10 text-amber-500 flex items-center justify-center">
+                  <ShieldAlert className="w-8 h-8" />
+                </div>
+                <h2 className="text-xl font-black font-heading text-stone-900 dark:text-stone-100">
+                  Super Admin Authority Required
+                </h2>
+                <p className="text-xs text-stone-500 max-w-md mx-auto">
+                  Admin verification is strictly restricted to the primary bootstrap Super Administrator ({BOOTSTRAP_ADMIN_EMAIL}). Standard administrators cannot verify, suspend, or revoke other administrators.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* 1. Header Card */}
+                <div className="card p-6 space-y-2">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-2xl font-black font-heading text-stone-900 dark:text-stone-100">
+                        ADMIN VERIFICATION
+                      </h2>
+                      <span className="badge badge-orange text-[10px] font-mono">
+                        SUPER ADMIN EXCLUSIVE
+                      </span>
+                    </div>
+                    <span className="text-xs font-mono text-stone-400">
+                      Bootstrap Account: {BOOTSTRAP_ADMIN_EMAIL}
+                    </span>
                   </div>
-                  <p className="text-xs text-stone-500 mt-1">
-                    Review and authorize administrator credentials, roles, and platform permissions.
+                  <p className="text-xs text-stone-500">
+                    Verify Code.SCRIET users as active administrators by email address. Manage authorization status (Active, Suspended, Revoked).
                   </p>
                 </div>
 
-                {/* Status Badges: [ Pending 3 ] [ Approved 12 ] [ Rejected 4 ] [ Suspended 1 ] */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={() => {
-                      setVerificationSubTab('APPLICATIONS');
-                      setVerificationFilter('PENDING');
-                    }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${
-                      verificationFilter === 'PENDING' && verificationSubTab === 'APPLICATIONS'
-                        ? 'bg-amber-500 text-white shadow-md'
-                        : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 hover:bg-amber-500/20'
-                    }`}
-                  >
-                    <Clock className="w-3.5 h-3.5" />
-                    <span>Pending {adminApplications.filter((a) => a.status === 'PENDING').length}</span>
-                  </button>
+                {/* 2. Search Code.SCRIET User Card */}
+                <div className="card p-6 space-y-4">
+                  <h3 className="font-heading font-black text-sm uppercase tracking-wider text-stone-800 dark:text-stone-200">
+                    Search Code.SCRIET User
+                  </h3>
+                  <form onSubmit={handleSearchUser} className="flex flex-col sm:flex-row gap-3">
+                    <div className="relative flex-1">
+                      <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        id="input-search-admin-email"
+                        type="email"
+                        placeholder="Enter Email Address (e.g. student@example.com)"
+                        value={searchEmailInput}
+                        onChange={(e) => setSearchEmailInput(e.target.value)}
+                        className="w-full text-xs pl-9 pr-3 py-2.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-900 focus:outline-none focus:border-orange-500"
+                      />
+                    </div>
+                    <button
+                      id="btn-search-user"
+                      type="submit"
+                      disabled={isSearchingUser}
+                      className="px-5 py-2.5 rounded-xl text-xs font-bold bg-orange-600 hover:bg-orange-500 text-white shadow-md shadow-orange-500/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isSearchingUser ? <Clock className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                      <span>SEARCH USER</span>
+                    </button>
+                  </form>
 
-                  <button
-                    onClick={() => {
-                      setVerificationSubTab('APPLICATIONS');
-                      setVerificationFilter('APPROVED');
-                    }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${
-                      verificationFilter === 'APPROVED' && verificationSubTab === 'APPLICATIONS'
-                        ? 'bg-emerald-500 text-white shadow-md'
-                        : 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/20'
-                    }`}
-                  >
-                    <Check className="w-3.5 h-3.5" />
-                    <span>Approved {adminApplications.filter((a) => a.status === 'APPROVED').length}</span>
-                  </button>
+                  {/* Search Error Alert */}
+                  {searchError && (
+                    <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-xs flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      <span>{searchError}</span>
+                    </div>
+                  )}
 
-                  <button
-                    onClick={() => {
-                      setVerificationSubTab('APPLICATIONS');
-                      setVerificationFilter('REJECTED');
-                    }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${
-                      verificationFilter === 'REJECTED' && verificationSubTab === 'APPLICATIONS'
-                        ? 'bg-red-500 text-white shadow-md'
-                        : 'bg-red-500/10 text-red-700 dark:text-red-400 hover:bg-red-500/20'
-                    }`}
-                  >
-                    <XOctagon className="w-3.5 h-3.5" />
-                    <span>Rejected {adminApplications.filter((a) => a.status === 'REJECTED').length}</span>
-                  </button>
+                  {/* USER RESULT CARD */}
+                  {searchedUser && (
+                    <div className="mt-4 p-5 rounded-2xl bg-stone-100 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 space-y-4">
+                      <div className="flex items-center justify-between pb-2 border-b border-stone-200 dark:border-stone-800">
+                        <span className="font-heading font-black text-xs uppercase tracking-wider text-orange-600 dark:text-orange-400">
+                          USER RESULT
+                        </span>
+                        <span className="text-[10px] text-stone-400 font-mono">
+                          Verified Code.SCRIET Member
+                        </span>
+                      </div>
 
-                  <button
-                    onClick={() => {
-                      setVerificationSubTab('APPLICATIONS');
-                      setVerificationFilter('SUSPENDED');
-                    }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition-all flex items-center gap-1.5 ${
-                      verificationFilter === 'SUSPENDED' && verificationSubTab === 'APPLICATIONS'
-                        ? 'bg-rose-500 text-white shadow-md'
-                        : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 hover:bg-rose-500/20'
-                    }`}
-                  >
-                    <Ban className="w-3.5 h-3.5" />
-                    <span>Suspended {adminApplications.filter((a) => a.status === 'SUSPENDED').length}</span>
-                  </button>
-                </div>
-              </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                        <div>
+                          <span className="text-stone-400 block text-[11px]">Name:</span>
+                          <span className="font-bold text-stone-900 dark:text-stone-100 text-sm">
+                            {searchedUser.name}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-stone-400 block text-[11px]">Email:</span>
+                          <span className="font-bold font-mono text-stone-800 dark:text-stone-200">
+                            {searchedUser.email}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-stone-400 block text-[11px]">Code.SCRIET User ID:</span>
+                          <span className="font-mono text-stone-600 dark:text-stone-400 text-[11px]">
+                            {searchedUser.id}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-stone-400 block text-[11px]">Current Role:</span>
+                          <span className="font-bold text-stone-800 dark:text-stone-200">
+                            {searchedUser.role}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-stone-400 block text-[11px]">Admin Status:</span>
+                          <span
+                            className={`font-bold px-2 py-0.5 rounded text-[10px] uppercase inline-block ${
+                              searchedUser.adminStatus === 'ACTIVE'
+                                ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
+                                : searchedUser.adminStatus === 'SUSPENDED'
+                                ? 'bg-rose-500/15 text-rose-600 border border-rose-500/30'
+                                : searchedUser.adminStatus === 'REVOKED'
+                                ? 'bg-red-500/15 text-red-600 border border-red-500/30'
+                                : 'bg-stone-500/15 text-stone-500 border border-stone-500/30'
+                            }`}
+                          >
+                            {searchedUser.adminStatus === 'ACTIVE'
+                              ? `VERIFIED ADMIN (${searchedUser.adminRole || 'ADMIN'})`
+                              : searchedUser.adminStatus === 'SUSPENDED'
+                              ? 'SUSPENDED ADMIN'
+                              : searchedUser.adminStatus === 'REVOKED'
+                              ? 'REVOKED ADMIN'
+                              : 'NOT VERIFIED'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-stone-400 block text-[11px]">Grant Role:</span>
+                          <select
+                            value={selectedVerifyRole}
+                            onChange={(e) => setSelectedVerifyRole(e.target.value as AdminPermissionRole)}
+                            className="text-xs p-1.5 rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-800 font-bold"
+                          >
+                            <option value="ADMIN">ADMIN (Full Simulator Ops)</option>
+                            <option value="EVENT_ADMIN">EVENT_ADMIN (Scarcity & Crisis)</option>
+                            <option value="EVENT_OPERATOR">EVENT_OPERATOR (Floor Ops)</option>
+                          </select>
+                        </div>
+                      </div>
 
-              {/* Sub-view Switcher */}
-              <div className="flex border-b border-stone-200 dark:border-stone-800 gap-4 text-xs font-bold pt-2">
-                <button
-                  onClick={() => setVerificationSubTab('APPLICATIONS')}
-                  className={`pb-2 transition-colors relative ${
-                    verificationSubTab === 'APPLICATIONS'
-                      ? 'text-orange-600 dark:text-orange-400 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-orange-500'
-                      : 'text-stone-500 hover:text-stone-800 dark:hover:text-stone-200'
-                  }`}
-                >
-                  Admin Applications ({adminApplications.length})
-                </button>
-                <button
-                  onClick={() => setVerificationSubTab('ACTIVE_ADMINS')}
-                  className={`pb-2 transition-colors relative ${
-                    verificationSubTab === 'ACTIVE_ADMINS'
-                      ? 'text-orange-600 dark:text-orange-400 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-orange-500'
-                      : 'text-stone-500 hover:text-stone-800 dark:hover:text-stone-200'
-                  }`}
-                >
-                  Active Authorized Admins ({adminAuthorizations.filter((a) => a.active).length})
-                </button>
-                <button
-                  onClick={() => setVerificationSubTab('AUDIT_TRAIL')}
-                  className={`pb-2 transition-colors relative ${
-                    verificationSubTab === 'AUDIT_TRAIL'
-                      ? 'text-orange-600 dark:text-orange-400 after:absolute after:bottom-0 after:left-0 after:right-0 after:h-0.5 after:bg-orange-500'
-                      : 'text-stone-500 hover:text-stone-800 dark:hover:text-stone-200'
-                  }`}
-                >
-                  Authorization Audit Trail ({adminAuditLogs.length})
-                </button>
-              </div>
-            </div>
-
-            {/* SUB-VIEW 1: APPLICATIONS */}
-            {verificationSubTab === 'APPLICATIONS' && (
-              <div className="card p-6 space-y-4">
-                {/* Search & Status Filters */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="relative max-w-sm w-full">
-                    <Search className="w-3.5 h-3.5 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      placeholder="Search applicants, emails, roles..."
-                      value={verificationSearch}
-                      onChange={(e) => setVerificationSearch(e.target.value)}
-                      className="w-full text-xs pl-9 pr-3 py-2 rounded-xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-900"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-semibold">
-                    <span className="text-stone-400 text-[11px] mr-1">Filter:</span>
-                    {(['ALL', 'PENDING', 'APPROVED', 'REJECTED', 'SUSPENDED'] as const).map((st) => (
-                      <button
-                        key={st}
-                        onClick={() => setVerificationFilter(st)}
-                        className={`px-2.5 py-1 rounded-lg transition-colors ${
-                          verificationFilter === st
-                            ? 'bg-orange-500 text-white font-bold'
-                            : 'bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-600 dark:text-stone-300'
-                        }`}
-                      >
-                        {st}
-                      </button>
-                    ))}
-                  </div>
+                      <div className="pt-2 border-t border-stone-200 dark:border-stone-800 flex items-center justify-end gap-3">
+                        <button
+                          id="btn-verify-admin"
+                          onClick={() => handleVerify(searchedUser.email)}
+                          disabled={actionLoadingEmail === searchedUser.email}
+                          className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-500/20 transition-all flex items-center gap-1.5"
+                        >
+                          <ShieldCheck className="w-4 h-4" />
+                          <span>{searchedUser.adminStatus === 'ACTIVE' ? 'UPDATE / RE-VERIFY ADMIN' : 'VERIFY ADMIN'}</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {/* Table of Applications */}
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-400 font-bold uppercase text-[10px] tracking-wider">
-                        <th className="pb-3 pl-2">Applicant</th>
-                        <th className="pb-3">Requested Role</th>
-                        <th className="pb-3">Applied</th>
-                        <th className="pb-3">Reason</th>
-                        <th className="pb-3">Status</th>
-                        <th className="pb-3">Reviewed By</th>
-                        <th className="pb-3 text-right pr-2">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-stone-100 dark:divide-stone-800/60 font-medium">
-                      {adminApplications
-                        .filter((app) => {
-                          const matchesFilter =
-                            verificationFilter === 'ALL' || app.status === verificationFilter;
-                          const matchesSearch =
-                            !verificationSearch ||
-                            app.name.toLowerCase().includes(verificationSearch.toLowerCase()) ||
-                            app.email.toLowerCase().includes(verificationSearch.toLowerCase()) ||
-                            app.reason.toLowerCase().includes(verificationSearch.toLowerCase()) ||
-                            app.requestedRole.toLowerCase().includes(verificationSearch.toLowerCase());
-                          return matchesFilter && matchesSearch;
-                        })
-                        .map((app) => {
-                          const isSelf =
-                            app.email.toLowerCase() === currentUser.email.toLowerCase() ||
-                            app.userId === currentUser.id;
+                {/* 3. VERIFIED ADMINS Card */}
+                <div className="card p-6 space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-stone-200 dark:border-stone-800">
+                    <div>
+                      <h3 className="font-heading font-black text-sm uppercase tracking-wider text-stone-800 dark:text-stone-200">
+                        VERIFIED ADMINS
+                      </h3>
+                      <p className="text-xs text-stone-500">
+                        Authoritative administrator accounts recognized by server
+                      </p>
+                    </div>
+                    <span className="badge badge-orange text-[10px] font-mono">
+                      {adminAuthorizations.filter((a) => a.status === 'ACTIVE' || a.active).length} Active Admins
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-400 font-semibold uppercase text-[10px]">
+                          <th className="py-2.5 px-3">Name</th>
+                          <th className="py-2.5 px-3">Email</th>
+                          <th className="py-2.5 px-3">Role</th>
+                          <th className="py-2.5 px-3">Status</th>
+                          <th className="py-2.5 px-3">Verified By</th>
+                          <th className="py-2.5 px-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
+                        {adminAuthorizations.map((auth) => {
+                          const isMaster = auth.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase();
+                          const isActive = auth.status === 'ACTIVE' || (auth.active && auth.status !== 'SUSPENDED' && auth.status !== 'REVOKED');
+                          const isSuspended = auth.status === 'SUSPENDED';
+                          const isRevoked = auth.status === 'REVOKED';
 
                           return (
-                            <tr key={app.id} className="hover:bg-stone-50 dark:hover:bg-stone-800/40 transition-colors">
-                              <td className="py-3.5 pl-2">
-                                <div className="font-bold text-stone-900 dark:text-stone-100">{app.name}</div>
-                                <div className="text-[11px] text-stone-500 truncate max-w-[180px]">{app.email}</div>
-                              </td>
-                              <td className="py-3.5">
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-stone-100 dark:bg-stone-800 border border-stone-200 dark:border-stone-700">
-                                  {app.requestedRole}
-                                </span>
-                              </td>
-                              <td className="py-3.5 text-stone-500 whitespace-nowrap">
-                                {new Date(app.submittedAt).toLocaleDateString('en-GB', {
-                                  day: '2-digit',
-                                  month: 'short',
-                                  year: 'numeric',
-                                })}
-                              </td>
-                              <td className="py-3.5 max-w-xs text-stone-600 dark:text-stone-300">
-                                <p className="line-clamp-2 text-[11px]">{app.reason}</p>
-                                {app.rejectionReason && (
-                                  <p className="text-[10px] text-red-500 mt-0.5 italic">
-                                    Note: {app.rejectionReason}
-                                  </p>
+                            <tr key={auth.id} className="hover:bg-stone-50/50 dark:hover:bg-stone-900/50 transition-colors">
+                              <td className="py-3 px-3 font-bold text-stone-900 dark:text-stone-100">
+                                {auth.name}
+                                {isMaster && (
+                                  <span className="ml-2 text-[9px] font-mono px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-500 font-bold">
+                                    PRIMARY BOOTSTRAP
+                                  </span>
                                 )}
                               </td>
-                              <td className="py-3.5">
+                              <td className="py-3 px-3 font-mono text-stone-700 dark:text-stone-300">
+                                {auth.email}
+                              </td>
+                              <td className="py-3 px-3">
+                                <span className="font-bold text-stone-800 dark:text-stone-200">
+                                  {auth.role}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3">
                                 <span
-                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                    app.status === 'PENDING'
-                                      ? 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                                      : app.status === 'APPROVED'
-                                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
-                                      : app.status === 'REJECTED'
-                                      ? 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
-                                      : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                    isActive
+                                      ? 'bg-emerald-500/15 text-emerald-600 border border-emerald-500/30'
+                                      : isSuspended
+                                      ? 'bg-rose-500/15 text-rose-600 border border-rose-500/30'
+                                      : 'bg-stone-500/15 text-stone-400 border border-stone-500/30'
                                   }`}
                                 >
-                                  {app.status}
+                                  {auth.status || (isActive ? 'ACTIVE' : 'INACTIVE')}
                                 </span>
                               </td>
-                              <td className="py-3.5 text-stone-500 text-[11px] whitespace-nowrap">
-                                {app.reviewedBy ? (
-                                  <div>
-                                    <div className="font-semibold text-stone-700 dark:text-stone-300">{app.reviewedBy}</div>
-                                    <div className="text-[10px] text-stone-400">
-                                      {app.reviewedAt ? new Date(app.reviewedAt).toLocaleDateString() : ''}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  <span className="text-stone-400 italic">Awaiting review</span>
-                                )}
+                              <td className="py-3 px-3 text-[11px] text-stone-500 truncate max-w-[140px]">
+                                {auth.verifiedBy || 'SYSTEM'}
                               </td>
-                              <td className="py-3.5 text-right pr-2">
-                                <div className="flex items-center justify-end gap-1.5">
-                                  {app.status === 'PENDING' ? (
-                                    isSelf ? (
-                                      <span
-                                        title="You cannot approve your own admin application (Privilege Escalation Prevention)"
-                                        className="text-[10px] text-stone-400 italic bg-stone-100 dark:bg-stone-800 px-2 py-1 rounded"
+                              <td className="py-3 px-3 text-right">
+                                {isMaster ? (
+                                  <span className="text-[10px] text-stone-400 font-mono italic">
+                                    Permanent Super Admin
+                                  </span>
+                                ) : (
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    {/* Suspend Action */}
+                                    {isActive && (
+                                      <button
+                                        id={`btn-suspend-admin-${auth.email}`}
+                                        onClick={() => handleSuspend(auth.email)}
+                                        disabled={actionLoadingEmail === auth.email}
+                                        className="px-2 py-1 rounded-lg text-[10px] font-bold bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 transition-colors"
                                       >
-                                        Self-Approval Prohibited
-                                      </span>
-                                    ) : (
-                                      <>
-                                        <button
-                                          onClick={() => {
-                                            setSelectedAppForApproval(app);
-                                            setApprovalRole(app.requestedRole);
-                                          }}
-                                          className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm transition-all"
-                                        >
-                                          APPROVE
-                                        </button>
-                                        <button
-                                          onClick={() => {
-                                            setSelectedAppForRejection(app);
-                                            setRejectionReasonText('');
-                                          }}
-                                          className="px-2.5 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 font-bold text-xs transition-all"
-                                        >
-                                          REJECT
-                                        </button>
-                                      </>
-                                    )
-                                  ) : app.status === 'APPROVED' ? (
-                                    <button
-                                      onClick={() => {
-                                        if (window.confirm(`Suspend administrative privileges for ${app.name}?`)) {
-                                          suspendAdminAccess(app.email, 'Privileges suspended from admin verification portal.');
-                                          showToast(`Admin access suspended for ${app.name}`);
-                                        }
-                                      }}
-                                      className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-bold text-xs transition-colors"
-                                    >
-                                      SUSPEND
-                                    </button>
-                                  ) : app.status === 'SUSPENDED' ? (
-                                    <button
-                                      onClick={() => {
-                                        reactivateAdminAccess(app.email, 'Privileges reinstated by administrator.');
-                                        showToast(`Admin access reactivated for ${app.name}`);
-                                      }}
-                                      className="px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-xs transition-colors"
-                                    >
-                                      REACTIVATE
-                                    </button>
-                                  ) : (
-                                    <button
-                                      onClick={() => {
-                                        setSelectedAppForApproval(app);
-                                        setApprovalRole(app.requestedRole);
-                                      }}
-                                      className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-400 font-bold text-xs transition-colors"
-                                    >
-                                      RE-REVIEW
-                                    </button>
-                                  )}
-                                </div>
+                                        Suspend
+                                      </button>
+                                    )}
+
+                                    {/* Reactivate Action */}
+                                    {(isSuspended || isRevoked) && (
+                                      <button
+                                        id={`btn-reactivate-admin-${auth.email}`}
+                                        onClick={() => handleReactivate(auth.email)}
+                                        disabled={actionLoadingEmail === auth.email}
+                                        className="px-2 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 transition-colors"
+                                      >
+                                        Reactivate
+                                      </button>
+                                    )}
+
+                                    {/* Revoke Action */}
+                                    {!isRevoked && (
+                                      <button
+                                        id={`btn-revoke-admin-${auth.email}`}
+                                        onClick={() => handleRevoke(auth.email)}
+                                        disabled={actionLoadingEmail === auth.email}
+                                        className="px-2 py-1 rounded-lg text-[10px] font-bold bg-stone-200 dark:bg-stone-800 hover:bg-red-500/20 hover:text-red-500 text-stone-600 dark:text-stone-400 transition-colors"
+                                      >
+                                        Revoke
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </td>
                             </tr>
                           );
                         })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* SUB-VIEW 2: ACTIVE AUTHORIZED ADMINISTRATORS */}
-            {verificationSubTab === 'ACTIVE_ADMINS' && (
-              <div className="card p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-heading font-black text-lg text-stone-900 dark:text-stone-100">
-                      Authoritative Active Administrators
-                    </h3>
-                    <p className="text-xs text-stone-500">
-                      These identities possess verified server-side administrative access to the platform.
-                    </p>
+                      </tbody>
+                    </table>
                   </div>
-                  <span className="badge badge-orange text-[10px]">
-                    {adminAuthorizations.filter((a) => a.active).length} Active
-                  </span>
                 </div>
 
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-400 font-bold uppercase text-[10px]">
-                        <th className="pb-3 pl-2">Admin Identity</th>
-                        <th className="pb-3">Role Tier</th>
-                        <th className="pb-3">Authorization</th>
-                        <th className="pb-3">Granted By</th>
-                        <th className="pb-3">Granted Date</th>
-                        <th className="pb-3 text-right pr-2">Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-stone-100 dark:divide-stone-800 font-medium">
-                      {adminAuthorizations.map((auth) => (
-                        <tr key={auth.id} className="hover:bg-stone-50 dark:hover:bg-stone-800/40">
-                          <td className="py-3.5 pl-2">
-                            <div className="font-bold text-stone-900 dark:text-stone-100 flex items-center gap-1.5">
-                              <span>{auth.name}</span>
-                              {auth.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase() && (
-                                <span className="text-[9px] bg-amber-500/20 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded font-mono font-bold">
-                                  BOOTSTRAP MASTER
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-stone-500 font-mono">{auth.email}</div>
-                          </td>
-                          <td className="py-3.5">
-                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-orange-100 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400">
-                              {auth.role}
-                            </span>
-                          </td>
-                          <td className="py-3.5">
-                            {auth.active ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-                                ACTIVE & VERIFIED
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300">
-                                SUSPENDED
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3.5 text-stone-600 dark:text-stone-400 text-[11px] max-w-xs truncate">
-                            {auth.grantedBy}
-                          </td>
-                          <td className="py-3.5 text-stone-500 text-[11px]">
-                            {new Date(auth.grantedAt).toLocaleDateString()}
-                          </td>
-                          <td className="py-3.5 text-right pr-2">
-                            {auth.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase() ? (
-                              <span className="text-[10px] text-stone-400 italic">Immutable Bootstrap</span>
-                            ) : auth.active ? (
-                              <button
-                                onClick={() => {
-                                  if (window.confirm(`Suspend administrative privileges for ${auth.name}?`)) {
-                                    suspendAdminAccess(auth.email, 'Privileges suspended by admin.');
-                                    showToast(`Admin privileges suspended for ${auth.name}`);
-                                  }
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 font-bold text-xs"
-                              >
-                                Suspend
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => {
-                                  reactivateAdminAccess(auth.email, 'Privileges restored.');
-                                  showToast(`Admin privileges restored for ${auth.name}`);
-                                }}
-                                className="px-2.5 py-1 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-bold text-xs"
-                              >
-                                Reactivate
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {/* SUB-VIEW 3: AUTHORIZATION AUDIT TRAIL */}
-            {verificationSubTab === 'AUDIT_TRAIL' && (
-              <div className="card p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="font-heading font-black text-lg text-stone-900 dark:text-stone-100">
-                      Authorization Mutation Audit Trail
-                    </h3>
-                    <p className="text-xs text-stone-500">
-                      Immutable log of all admin privilege grants, verifications, rejections, and suspensions.
-                    </p>
-                  </div>
-                  <span className="badge badge-orange text-[10px]">{adminAuditLogs.length} Entries</span>
-                </div>
-
-                <div className="max-h-96 overflow-y-auto space-y-2 font-mono text-xs">
-                  {adminAuditLogs.map((audit) => (
-                    <div
-                      key={audit.id}
-                      className="p-3.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-100 dark:border-stone-800 flex items-start justify-between gap-4"
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-orange-600 dark:text-orange-400">
-                            [{audit.action}]
-                          </span>
-                          <span className="text-stone-400 text-[11px]">
-                            {audit.beforeStatus} → <strong className="text-stone-800 dark:text-stone-200">{audit.afterStatus}</strong>
-                          </span>
-                        </div>
-                        <div className="text-xs font-sans text-stone-700 dark:text-stone-300">
-                          Target: <strong className="font-mono">{audit.targetEmail}</strong> • Actor: <span className="font-mono text-stone-500">{audit.actorEmail}</span>
-                        </div>
-                        {audit.reason && (
-                          <div className="text-[11px] font-sans text-stone-500 italic">
-                            Reason: {audit.reason}
-                          </div>
-                        )}
-                      </div>
-                      <span className="text-[10px] text-stone-400 flex-shrink-0">
-                        {new Date(audit.timestamp).toLocaleString()}
-                      </span>
+                {/* 4. AUTHORIZATION AUDIT LOG */}
+                <div className="card p-6 space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-stone-200 dark:border-stone-800">
+                    <div>
+                      <h3 className="font-heading font-black text-sm uppercase tracking-wider text-stone-800 dark:text-stone-200">
+                        AUTHORIZATION AUDIT TRAIL
+                      </h3>
+                      <p className="text-xs text-stone-500">
+                        Immutable log of administrative authorizations, suspensions, and revocations
+                      </p>
                     </div>
-                  ))}
+                    <span className="badge badge-orange text-[10px] font-mono">
+                      {adminAuditLogs.length} Records
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-stone-200 dark:border-stone-800 text-stone-400 font-semibold uppercase text-[10px]">
+                          <th className="py-2.5 px-3">Actor</th>
+                          <th className="py-2.5 px-3">Target Admin</th>
+                          <th className="py-2.5 px-3">Action</th>
+                          <th className="py-2.5 px-3">Status Transition</th>
+                          <th className="py-2.5 px-3">Reason</th>
+                          <th className="py-2.5 px-3 text-right">Timestamp</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-200 dark:divide-stone-800 font-mono text-[11px]">
+                        {adminAuditLogs.slice(0, 15).map((log) => (
+                          <tr key={log.id} className="hover:bg-stone-50/50 dark:hover:bg-stone-900/50">
+                            <td className="py-2.5 px-3 font-bold text-orange-500">
+                              {log.actorEmail}
+                            </td>
+                            <td className="py-2.5 px-3 text-stone-800 dark:text-stone-200">
+                              {log.targetEmail}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-300">
+                                {log.action}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-stone-500">
+                              {log.beforeStatus} → <span className="font-bold text-stone-900 dark:text-stone-100">{log.afterStatus}</span>
+                            </td>
+                            <td className="py-2.5 px-3 font-sans text-xs text-stone-600 dark:text-stone-400 max-w-[200px] truncate">
+                              {log.reason || 'Operational security update'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right text-stone-400 text-[10px]">
+                              {new Date(log.timestamp).toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
+              </>
             )}
           </div>
         )}
@@ -1896,135 +1885,6 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
         </div>
       )}
 
-      {/* Approval Confirmation Modal */}
-      {selectedAppForApproval && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="card max-w-md w-full p-6 bg-white dark:bg-[#12141C] space-y-4 shadow-2xl rounded-3xl border border-emerald-500/40 animate-in zoom-in-95">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center">
-                <Check className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-black font-heading text-stone-900 dark:text-stone-100">
-                  Approve Admin Access
-                </h3>
-                <p className="text-xs text-stone-500">Grant administrative operational credentials</p>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-xs space-y-1.5">
-              <div><strong>Applicant:</strong> {selectedAppForApproval.name}</div>
-              <div><strong>Email:</strong> {selectedAppForApproval.email}</div>
-              <div><strong>Requested Role:</strong> {selectedAppForApproval.requestedRole}</div>
-              <div className="text-[11px] text-stone-500 pt-1 border-t border-stone-200 dark:border-stone-800">
-                <strong>Reason:</strong> {selectedAppForApproval.reason}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
-                Assign Admin Role / Authority Tier
-              </label>
-              <select
-                value={approvalRole}
-                onChange={(e) => setApprovalRole(e.target.value as AdminPermissionRole)}
-                className="w-full text-xs p-2.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900"
-              >
-                <option value="EVENT_OPERATOR">Event Operator (Floor ops, score verification)</option>
-                <option value="MODERATOR">Moderator (Public ticker, announcements)</option>
-                <option value="EVENT_ADMIN">Event Admin (Crisis, auctions, loans)</option>
-                <option value="ADMIN">Full Administrator (Simulation state, ledger reconciliation)</option>
-                {isSuperAdmin() && <option value="SUPER_ADMIN">Super Admin (Verification authority)</option>}
-              </select>
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <button
-                onClick={() => setSelectedAppForApproval(null)}
-                className="btn-secondary py-2 px-5 text-xs font-bold"
-              >
-                Cancel
-              </button>
-              <button
-                id="btn-confirm-approve-admin"
-                onClick={() => {
-                  const res = approveAdminApplication(selectedAppForApproval.id, approvalRole);
-                  if (res.success) {
-                    showToast(res.message);
-                    setSelectedAppForApproval(null);
-                  } else {
-                    alert(res.message);
-                  }
-                }}
-                className="btn-primary py-2 px-6 text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-500/20"
-              >
-                Approve Admin
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rejection Confirmation Modal */}
-      {selectedAppForRejection && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="card max-w-md w-full p-6 bg-white dark:bg-[#12141C] space-y-4 shadow-2xl rounded-3xl border border-red-500/40 animate-in zoom-in-95">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-red-500/10 text-red-600 flex items-center justify-center">
-                <XOctagon className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-black font-heading text-stone-900 dark:text-stone-100">
-                  Reject Admin Request
-                </h3>
-                <p className="text-xs text-stone-500">Decline operational administrator application</p>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-stone-50 dark:bg-stone-900 border border-stone-200 dark:border-stone-800 text-xs space-y-1">
-              <div><strong>Applicant:</strong> {selectedAppForRejection.name}</div>
-              <div><strong>Email:</strong> {selectedAppForRejection.email}</div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-stone-700 dark:text-stone-300 mb-1">
-                Rejection Reason (Optional note for applicant and audit trail)
-              </label>
-              <textarea
-                rows={3}
-                value={rejectionReasonText}
-                onChange={(e) => setRejectionReasonText(e.target.value)}
-                placeholder="e.g., Conflict of interest, role capacity full, requirements not met..."
-                className="w-full text-xs p-2.5 rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 resize-none focus:ring-2 focus:ring-red-500"
-              />
-            </div>
-
-            <div className="flex items-center justify-between pt-2">
-              <button
-                onClick={() => setSelectedAppForRejection(null)}
-                className="btn-secondary py-2 px-5 text-xs font-bold"
-              >
-                Cancel
-              </button>
-              <button
-                id="btn-confirm-reject-admin"
-                onClick={() => {
-                  const res = rejectAdminApplication(selectedAppForRejection.id, rejectionReasonText);
-                  if (res.success) {
-                    showToast(res.message);
-                    setSelectedAppForRejection(null);
-                  } else {
-                    alert(res.message);
-                  }
-                }}
-                className="btn-danger py-2 px-6 text-xs font-bold bg-red-600 hover:bg-red-500 text-white shadow-md shadow-red-500/20"
-              >
-                Reject Request
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      </div>
   );
 };

@@ -324,11 +324,16 @@ export interface Announcement {
 // ============================================================================
 
 export type AdminAuthorizationStatus =
+  | 'NONE'
+  | 'ACTIVE'
+  | 'SUSPENDED'
+  | 'REVOKED'
+  // Backward compatibility aliases
   | 'NORMAL_USER'
-  | 'ADMIN_PENDING'
   | 'ADMIN_VERIFIED'
-  | 'ADMIN_REJECTED'
-  | 'ADMIN_SUSPENDED';
+  | 'ADMIN_SUSPENDED'
+  | 'ADMIN_PENDING'
+  | 'ADMIN_REJECTED';
 
 export type AdminPermissionRole =
   | 'SUPER_ADMIN'
@@ -337,6 +342,48 @@ export type AdminPermissionRole =
   | 'EVENT_OPERATOR'
   | 'MODERATOR';
 
+export interface AdminAuthorization {
+  id: string;
+  userId: string;
+  email: string;
+  name: string;
+  role: AdminPermissionRole;
+  status: 'ACTIVE' | 'SUSPENDED' | 'REVOKED';
+  verifiedBy: string;
+  verifiedAt: string;
+  suspendedAt?: string;
+  revokedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  notes?: string;
+  // Backward-compat flags
+  verified?: boolean;
+  active?: boolean;
+}
+
+export interface AdminAuditLogEntry {
+  id: string;
+  actorUserId: string;
+  actorEmail: string;
+  targetUserId: string;
+  targetEmail: string;
+  action:
+    | 'ADMIN_VERIFIED'
+    | 'ADMIN_SUSPENDED'
+    | 'ADMIN_REACTIVATED'
+    | 'ADMIN_REVOKED'
+    | 'BOOTSTRAP_INITIAL_ADMIN'
+    | 'ADMIN_ACCESS_REVOKED'
+    | 'ADMIN_ACCESS_SUSPENDED'
+    | 'ADMIN_ACCESS_REACTIVATED'
+    | 'ADMIN_APPLICATION_APPROVED';
+  beforeStatus: string;
+  afterStatus: string;
+  timestamp: string;
+  reason?: string;
+}
+
+// Deprecated: kept for migration compatibility
 export interface AdminApplication {
   id: string;
   userId: string;
@@ -350,41 +397,5 @@ export interface AdminApplication {
   reviewedBy?: string;
   reviewedByEmail?: string;
   rejectionReason?: string;
-}
-
-export interface AdminAuthorization {
-  id: string;
-  userId: string;
-  email: string;
-  name: string;
-  role: AdminPermissionRole;
-  verified: boolean;
-  active: boolean;
-  grantedAt: string;
-  grantedBy: string;
-  revokedAt?: string;
-  suspendedAt?: string;
-  notes?: string;
-}
-
-export interface AdminAuditLogEntry {
-  id: string;
-  actorUserId: string;
-  actorEmail: string;
-  targetUserId: string;
-  targetEmail: string;
-  applicationId?: string;
-  action:
-    | 'ADMIN_APPLICATION_SUBMITTED'
-    | 'ADMIN_APPLICATION_APPROVED'
-    | 'ADMIN_APPLICATION_REJECTED'
-    | 'ADMIN_ACCESS_REVOKED'
-    | 'ADMIN_ACCESS_SUSPENDED'
-    | 'ADMIN_ACCESS_REACTIVATED'
-    | 'BOOTSTRAP_INITIAL_ADMIN';
-  beforeStatus: string;
-  afterStatus: string;
-  timestamp: string;
-  reason?: string;
 }
 

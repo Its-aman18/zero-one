@@ -1,11 +1,9 @@
 import {
-  AdminApplication,
   AdminAuthorization,
   AdminAuditLogEntry,
   AdminAuthorizationStatus,
-  AdminPermissionRole,
   CodeScrietUser,
-} from '../types';
+} from '../types/index';
 
 export const BOOTSTRAP_ADMIN_EMAIL = 'applicationinformation73737@gmail.com';
 
@@ -16,11 +14,14 @@ export const INITIAL_ADMIN_AUTHORIZATIONS: AdminAuthorization[] = [
     email: BOOTSTRAP_ADMIN_EMAIL,
     name: 'Code.SCRIET Master Admin',
     role: 'SUPER_ADMIN',
+    status: 'ACTIVE',
     verified: true,
     active: true,
-    grantedAt: '2026-01-01T00:00:00.000Z',
-    grantedBy: 'SYSTEM_BOOTSTRAP',
-    notes: 'Official authoritative bootstrap administrator for Code.SCRIET platform',
+    verifiedBy: 'SYSTEM_BOOTSTRAP',
+    verifiedAt: '2026-01-01T00:00:00.000Z',
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    notes: 'Official permanent authoritative Super Admin for Code.SCRIET platform',
   },
   {
     id: 'auth-kavita-02',
@@ -28,75 +29,46 @@ export const INITIAL_ADMIN_AUTHORIZATIONS: AdminAuthorization[] = [
     email: 'kavita@scriet.ac.in',
     name: 'Kavita Rao',
     role: 'EVENT_ADMIN',
+    status: 'ACTIVE',
     verified: true,
     active: true,
-    grantedAt: '2026-02-15T10:00:00.000Z',
-    grantedBy: BOOTSTRAP_ADMIN_EMAIL,
+    verifiedBy: BOOTSTRAP_ADMIN_EMAIL,
+    verifiedAt: '2026-02-15T10:00:00.000Z',
+    createdAt: '2026-02-15T10:00:00.000Z',
+    updatedAt: '2026-02-15T10:00:00.000Z',
     notes: 'Technical Lead for Event Operations & Scarcity Engine',
   },
-];
-
-export const INITIAL_ADMIN_APPLICATIONS: AdminApplication[] = [
   {
-    id: 'app-priya-01',
-    userId: 'usr-priya',
-    name: 'Priya Sharma',
-    email: 'priya@scriet.ac.in',
-    status: 'PENDING',
-    reason: 'Overseeing live floor logistics and team role token reissuances during Round 2 and Round 3.',
-    requestedRole: 'EVENT_OPERATOR',
-    submittedAt: '2026-02-25T11:30:00.000Z',
-  },
-  {
-    id: 'app-rahul-02',
-    userId: 'usr-rahul',
-    name: 'Rahul Verma',
-    email: 'rahul@scriet.ac.in',
-    status: 'PENDING',
-    reason: 'Assisting with auditorium live screen audio-visual feeds and scoring tally verification.',
-    requestedRole: 'MODERATOR',
-    submittedAt: '2026-02-25T14:15:00.000Z',
-  },
-  {
-    id: 'app-kavita-03',
-    userId: 'usr-kavita',
-    name: 'Kavita Rao',
-    email: 'kavita@scriet.ac.in',
-    status: 'APPROVED',
-    reason: 'Technical club lead for event platform operations and ledger reconciliation.',
-    requestedRole: 'EVENT_ADMIN',
-    submittedAt: '2026-02-14T09:00:00.000Z',
-    reviewedAt: '2026-02-15T10:00:00.000Z',
-    reviewedBy: 'Code.SCRIET Master Admin',
-    reviewedByEmail: BOOTSTRAP_ADMIN_EMAIL,
-  },
-  {
-    id: 'app-vikram-04',
-    userId: 'usr-vikram',
-    name: 'Vikram Singh',
-    email: 'vikram@scriet.ac.in',
-    status: 'REJECTED',
-    reason: 'Wanting early access to event crisis cards for personal research.',
-    requestedRole: 'ADMIN',
-    submittedAt: '2026-02-20T16:00:00.000Z',
-    reviewedAt: '2026-02-21T11:00:00.000Z',
-    reviewedBy: 'Code.SCRIET Master Admin',
-    reviewedByEmail: BOOTSTRAP_ADMIN_EMAIL,
-    rejectionReason: 'Conflict of interest: applicant is competing on an active participating squad.',
-  },
-  {
-    id: 'app-rohan-05',
+    id: 'auth-rohan-03',
     userId: 'usr-rohan',
-    name: 'Rohan Mehta',
     email: 'rohan@scriet.ac.in',
+    name: 'Rohan Mehta',
+    role: 'EVENT_OPERATOR',
     status: 'SUSPENDED',
-    reason: 'Student coordinator volunteer.',
-    requestedRole: 'EVENT_OPERATOR',
-    submittedAt: '2026-02-10T12:00:00.000Z',
-    reviewedAt: '2026-02-11T10:00:00.000Z',
-    reviewedBy: 'Code.SCRIET Master Admin',
-    reviewedByEmail: BOOTSTRAP_ADMIN_EMAIL,
-    rejectionReason: 'Access revoked due to unauthorized device token broadcast.',
+    verified: false,
+    active: false,
+    verifiedBy: BOOTSTRAP_ADMIN_EMAIL,
+    verifiedAt: '2026-02-10T12:00:00.000Z',
+    suspendedAt: '2026-02-24T18:00:00.000Z',
+    createdAt: '2026-02-10T12:00:00.000Z',
+    updatedAt: '2026-02-24T18:00:00.000Z',
+    notes: 'Suspended by Super Admin due to audit token revocation',
+  },
+  {
+    id: 'auth-vikram-04',
+    userId: 'usr-vikram',
+    email: 'vikram@scriet.ac.in',
+    name: 'Vikram Singh',
+    role: 'ADMIN',
+    status: 'REVOKED',
+    verified: false,
+    active: false,
+    verifiedBy: BOOTSTRAP_ADMIN_EMAIL,
+    verifiedAt: '2026-02-01T10:00:00.000Z',
+    revokedAt: '2026-02-20T16:00:00.000Z',
+    createdAt: '2026-02-01T10:00:00.000Z',
+    updatedAt: '2026-02-20T16:00:00.000Z',
+    notes: 'Access revoked by Super Admin due to squad competition conflict',
   },
 ];
 
@@ -119,38 +91,35 @@ export const INITIAL_ADMIN_AUDIT_LOGS: AdminAuditLogEntry[] = [
     actorEmail: BOOTSTRAP_ADMIN_EMAIL,
     targetUserId: 'usr-kavita',
     targetEmail: 'kavita@scriet.ac.in',
-    applicationId: 'app-kavita-03',
-    action: 'ADMIN_APPLICATION_APPROVED',
-    beforeStatus: 'PENDING',
-    afterStatus: 'APPROVED (EVENT_ADMIN)',
+    action: 'ADMIN_VERIFIED',
+    beforeStatus: 'NONE',
+    afterStatus: 'ACTIVE (EVENT_ADMIN)',
     timestamp: '2026-02-15T10:00:00.000Z',
-    reason: 'Verified as technical operations lead for Code.SCRIET flagship events',
+    reason: 'Verified by Super Admin for technical operations',
   },
   {
     id: 'audit-003',
     actorUserId: 'usr-bootstrap-admin',
     actorEmail: BOOTSTRAP_ADMIN_EMAIL,
-    targetUserId: 'usr-vikram',
-    targetEmail: 'vikram@scriet.ac.in',
-    applicationId: 'app-vikram-04',
-    action: 'ADMIN_APPLICATION_REJECTED',
-    beforeStatus: 'PENDING',
-    afterStatus: 'REJECTED',
-    timestamp: '2026-02-21T11:00:00.000Z',
-    reason: 'Conflict of interest: applicant is competing on an active participating squad',
+    targetUserId: 'usr-rohan',
+    targetEmail: 'rohan@scriet.ac.in',
+    action: 'ADMIN_SUSPENDED',
+    beforeStatus: 'ACTIVE',
+    afterStatus: 'SUSPENDED',
+    timestamp: '2026-02-24T18:00:00.000Z',
+    reason: 'Access suspended by Super Admin due to device token broadcast',
   },
   {
     id: 'audit-004',
     actorUserId: 'usr-bootstrap-admin',
     actorEmail: BOOTSTRAP_ADMIN_EMAIL,
-    targetUserId: 'usr-rohan',
-    targetEmail: 'rohan@scriet.ac.in',
-    applicationId: 'app-rohan-05',
-    action: 'ADMIN_ACCESS_SUSPENDED',
-    beforeStatus: 'APPROVED',
-    afterStatus: 'SUSPENDED',
-    timestamp: '2026-02-24T18:00:00.000Z',
-    reason: 'Access revoked due to unauthorized device token broadcast',
+    targetUserId: 'usr-vikram',
+    targetEmail: 'vikram@scriet.ac.in',
+    action: 'ADMIN_REVOKED',
+    beforeStatus: 'ACTIVE',
+    afterStatus: 'REVOKED',
+    timestamp: '2026-02-20T16:00:00.000Z',
+    reason: 'Revoked by Super Admin: active participating squad conflict',
   },
 ];
 
@@ -171,9 +140,9 @@ export const PRESET_USERS: {
       avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=150&q=80',
     },
     label: 'Initial Bootstrap Super Admin',
-    expectedStatus: 'ADMIN_VERIFIED',
+    expectedStatus: 'ACTIVE',
     badge: 'SUPER_ADMIN',
-    description: 'Initial authoritative administrator. Full Admin & Verification access.',
+    description: 'Permanent Super Admin. Can verify, suspend, and revoke admins.',
   },
   {
     user: {
@@ -184,22 +153,9 @@ export const PRESET_USERS: {
       avatarUrl: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=150&q=80',
     },
     label: 'Normal Student / Founder',
-    expectedStatus: 'NORMAL_USER',
+    expectedStatus: 'NONE',
     badge: 'MEMBER',
-    description: 'Standard campus founder. Admin button hidden. 403 on direct URL.',
-  },
-  {
-    user: {
-      id: 'usr-priya',
-      name: 'Priya Sharma',
-      email: 'priya@scriet.ac.in',
-      role: 'USER',
-      avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=150&q=80',
-    },
-    label: 'Pending Admin Applicant',
-    expectedStatus: 'ADMIN_PENDING',
-    badge: 'PENDING',
-    description: 'Applied for Event Operator. Awaiting review. No admin access.',
+    description: 'Standard campus founder. Admin button hidden. No apply option.',
   },
   {
     user: {
@@ -210,9 +166,9 @@ export const PRESET_USERS: {
       avatarUrl: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?auto=format&fit=crop&w=150&q=80',
     },
     label: 'Verified Event Admin',
-    expectedStatus: 'ADMIN_VERIFIED',
+    expectedStatus: 'ACTIVE',
     badge: 'EVENT_ADMIN',
-    description: 'Approved administrator. Admin button visible.',
+    description: 'Super Admin verified. Admin button visible.',
   },
   {
     user: {
@@ -223,8 +179,77 @@ export const PRESET_USERS: {
       avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=150&q=80',
     },
     label: 'Suspended Admin Account',
-    expectedStatus: 'ADMIN_SUSPENDED',
+    expectedStatus: 'SUSPENDED',
     badge: 'SUSPENDED',
-    description: 'Access revoked. Admin button hidden. Access denied.',
+    description: 'Access suspended by Super Admin. Admin button hidden.',
+  },
+  {
+    user: {
+      id: 'usr-vikram',
+      name: 'Vikram Singh',
+      email: 'vikram@scriet.ac.in',
+      role: 'USER',
+      avatarUrl: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=150&q=80',
+    },
+    label: 'Revoked Admin Account',
+    expectedStatus: 'REVOKED',
+    badge: 'REVOKED',
+    description: 'Access revoked by Super Admin. Normal Code.SCRIET user.',
   },
 ];
+
+// =========================================================================
+// AUTHORIZATION ABSTRACTION INTERFACE (Requirement 23)
+// Clean abstraction layer ready to connect to Code.SCRIET API
+// =========================================================================
+
+export interface AuthorizationState {
+  isAuthenticated: boolean;
+  isVerifiedAdmin: boolean;
+  loading: boolean;
+  status: AdminAuthorizationStatus;
+  role?: string;
+  user?: CodeScrietUser | null;
+  authorization?: AdminAuthorization | null;
+}
+
+/**
+ * Returns the currently authenticated user from Code.SCRIET session
+ */
+export function getCurrentUser(): CodeScrietUser {
+  try {
+    const raw = localStorage.getItem('zero_one_user');
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    // fallback
+  }
+  return PRESET_USERS[1].user; // Default Aman Gupta (Normal user)
+}
+
+/**
+ * Returns the authoritative admin authorization record for an email or ID
+ */
+export function getAdminAuthorization(emailOrId?: string): AdminAuthorization | undefined {
+  const email = (emailOrId || getCurrentUser().email || '').toLowerCase().trim();
+  try {
+    const raw = localStorage.getItem('zero_one_admin_authorizations');
+    if (raw) {
+      const records: AdminAuthorization[] = JSON.parse(raw);
+      return records.find((r) => r.email.toLowerCase() === email || r.userId === emailOrId);
+    }
+  } catch (e) {
+    // fallback
+  }
+  return INITIAL_ADMIN_AUTHORIZATIONS.find((r) => r.email.toLowerCase() === email);
+}
+
+/**
+ * Evaluates whether an email/user identity has verified active administrator status
+ */
+export function isVerifiedAdmin(emailOrId?: string): boolean {
+  const email = (emailOrId || getCurrentUser().email || '').toLowerCase().trim();
+  if (email === BOOTSTRAP_ADMIN_EMAIL.toLowerCase()) return true;
+  const auth = getAdminAuthorization(email);
+  return Boolean(auth && (auth.status === 'ACTIVE' || auth.active));
+}
+

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CodeScrietLogo } from './CodeScrietLogo';
 import { useSimulation } from '../services/simulationContext';
-import { RequestAdminModal } from './RequestAdminModal';
 import { PRESET_USERS, BOOTSTRAP_ADMIN_EMAIL } from '../services/adminAuthService';
 import {
   Sun,
@@ -60,7 +59,6 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
   const [isTeamDropdownOpen, setIsTeamDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
   const [showEmailLoginForm, setShowEmailLoginForm] = useState(false);
   const [customEmailInput, setCustomEmailInput] = useState('');
 
@@ -309,20 +307,15 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
                         <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
                         <span>{isSuperAdmin() ? 'Super Administrator' : 'Verified Administrator'}</span>
                       </div>
-                    ) : getAdminStatus() === 'ADMIN_PENDING' ? (
-                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400">
-                        <Clock className="w-3.5 h-3.5 text-amber-500 animate-spin" />
-                        <span>Admin Application Pending</span>
-                      </div>
-                    ) : getAdminStatus() === 'ADMIN_SUSPENDED' ? (
+                    ) : getAdminStatus() === 'SUSPENDED' || getAdminStatus() === 'ADMIN_SUSPENDED' ? (
                       <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400">
                         <Ban className="w-3.5 h-3.5 text-rose-500" />
                         <span>Admin Privileges Suspended</span>
                       </div>
-                    ) : getAdminStatus() === 'ADMIN_REJECTED' ? (
+                    ) : getAdminStatus() === 'REVOKED' ? (
                       <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-400">
-                        <AlertCircle className="w-3.5 h-3.5 text-red-500" />
-                        <span>Admin Request Rejected</span>
+                        <Ban className="w-3.5 h-3.5 text-red-500" />
+                        <span>Admin Access Revoked</span>
                       </div>
                     ) : (
                       <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-orange-100 dark:bg-orange-950/60 text-orange-600 dark:text-orange-400">
@@ -332,8 +325,8 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
                     )}
                   </div>
 
-                  {/* Direct Admin Access / Apply Button in Profile */}
-                  {isAdminVerified() ? (
+                  {/* Direct Admin Access Button in Profile - ONLY for Verified Active Admins */}
+                  {isAdminVerified() && (
                     <a
                       id="profile-open-admin-btn"
                       href="/admin.html"
@@ -345,27 +338,6 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
                       </span>
                       <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded">Enter</span>
                     </a>
-                  ) : (
-                    <button
-                      id="profile-apply-admin-btn"
-                      onClick={() => {
-                        setIsRoleDropdownOpen(false);
-                        setIsApplyModalOpen(true);
-                      }}
-                      className="mt-2.5 w-full py-2 px-3 rounded-xl bg-stone-100 dark:bg-stone-800 hover:bg-stone-200 dark:hover:bg-stone-700 text-stone-800 dark:text-stone-200 text-xs font-bold flex items-center justify-between transition-colors"
-                    >
-                      <span className="flex items-center gap-2">
-                        <Send className="w-3.5 h-3.5 text-orange-500" />
-                        <span>
-                          {getAdminStatus() === 'ADMIN_PENDING'
-                            ? 'Check Application Status'
-                            : 'Apply for Admin Access'}
-                        </span>
-                      </span>
-                      <span className="text-[10px] text-stone-400 font-normal">
-                        {getAdminStatus() === 'ADMIN_PENDING' ? 'Pending' : 'Request'}
-                      </span>
-                    </button>
                   )}
                 </div>
 
@@ -608,18 +580,6 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
             </a>
           )}
 
-          {!isAdminVerified() && (
-            <button
-              onClick={() => {
-                setIsApplyModalOpen(true);
-                setIsMobileMenuOpen(false);
-              }}
-              className="w-full text-left py-2 px-3 rounded-lg text-sm font-semibold hover:bg-stone-100 dark:hover:bg-stone-800 text-stone-500 flex items-center gap-2"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>Apply for Admin Access</span>
-            </button>
-          )}
         </div>
       )}
 
@@ -646,13 +606,6 @@ export const Header: React.FC<HeaderProps> = ({ currentView, onNavigate }) => {
           </p>
         </div>
       )}
-
-      {/* Request Admin Modal */}
-      <RequestAdminModal
-        isOpen={isApplyModalOpen}
-        onClose={() => setIsApplyModalOpen(false)}
-        onNavigateToAdmin={() => onNavigate('admin-control')}
-      />
     </header>
   );
 };

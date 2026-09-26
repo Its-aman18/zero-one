@@ -18,6 +18,7 @@ import {
   Shield,
   Layers,
 } from 'lucide-react';
+import { ZERO_ONE_CONFIG } from '../data/zeroOneConfig';
 
 interface LandingPageProps {
   onNavigate: (view: string) => void;
@@ -68,19 +69,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               <div className="flex flex-wrap items-center gap-y-2.5 gap-x-4 text-xs font-semibold text-stone-600 dark:text-stone-300">
                 <div className="flex items-center gap-1.5">
                   <Calendar className="w-4 h-4 text-orange-500" />
-                  <span>Feb 2026</span>
+                  <span>{ZERO_ONE_CONFIG.dates.displayDate}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Users className="w-4 h-4 text-orange-500" />
-                  <span>3–5 per team</span>
+                  <span>{ZERO_ONE_CONFIG.teamRequirements.minMembers} per squad</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <MapPin className="w-4 h-4 text-orange-500" />
-                  <span>SCRIET Campus</span>
+                  <span>{ZERO_ONE_CONFIG.venue.displayLocation}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Award className="w-4 h-4 text-orange-500" />
-                  <span>Flagship Event</span>
+                  <span>{ZERO_ONE_CONFIG.edition}</span>
                 </div>
               </div>
 

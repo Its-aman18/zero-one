@@ -1,4 +1,4 @@
-import { MarketItem, CrisisCard, Team, EventConfig, JudgingCriteria } from '../types';
+import { MarketItem, CrisisCard, Team, EventConfig, JudgingCriteria } from '../types/index';
 
 export const DEFAULT_CONFIG: EventConfig = {
   id: 'zero-one-2026',

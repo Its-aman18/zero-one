@@ -22,7 +22,6 @@ import {
   Announcement,
   LedgerSource,
   JudgingCriteria,
-  AdminApplication,
   AdminAuthorization,
   AdminAuditLogEntry,
   AdminAuthorizationStatus,
@@ -38,8 +37,8 @@ import {
 import {
   BOOTSTRAP_ADMIN_EMAIL,
   INITIAL_ADMIN_AUTHORIZATIONS,
-  INITIAL_ADMIN_APPLICATIONS,
   INITIAL_ADMIN_AUDIT_LOGS,
+  AuthorizationState,
 } from './adminAuthService';
 import { realtimeBus } from './eventBus';
 
@@ -149,18 +148,21 @@ interface SimulationContextType {
   createSnapshot: () => string;
   restoreSnapshot: (snapshotJson: string) => boolean;
 
-  // Admin Authorization & Verification System (Authoritative Single Source of Truth)
+  // Admin Authorization & Verification System (Authoritative Super Admin Control)
+  authorizationState: AuthorizationState;
   adminAuthorizations: AdminAuthorization[];
-  adminApplications: AdminApplication[];
   adminAuditLogs: AdminAuditLogEntry[];
   getAdminStatus: (userIdOrEmail?: string) => AdminAuthorizationStatus;
   isAdminVerified: (userIdOrEmail?: string) => boolean;
   isSuperAdmin: (userIdOrEmail?: string) => boolean;
-  submitAdminApplication: (data: { reason: string; requestedRole: AdminPermissionRole }) => { success: boolean; message: string };
-  approveAdminApplication: (applicationId: string, role?: AdminPermissionRole) => { success: boolean; message: string };
-  rejectAdminApplication: (applicationId: string, reason?: string) => { success: boolean; message: string };
-  suspendAdminAccess: (targetUserIdOrEmail: string, reason?: string) => { success: boolean; message: string };
-  reactivateAdminAccess: (targetUserIdOrEmail: string, reason?: string) => { success: boolean; message: string };
+  searchUserByEmail: (email: string) => Promise<{ found: boolean; user?: any; error?: string }>;
+  verifyAdminByEmail: (targetEmail: string, role?: AdminPermissionRole) => Promise<{ success: boolean; message: string }>;
+  suspendAdmin: (targetEmail: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  revokeAdmin: (targetEmail: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  reactivateAdmin: (targetEmail: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  suspendAdminAccess: (targetUserIdOrEmail: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  reactivateAdminAccess: (targetUserIdOrEmail: string, reason?: string) => Promise<{ success: boolean; message: string }>;
+  refreshAuthorizationState: () => Promise<void>;
   loginWithEmail: (email: string, name?: string) => void;
   adminNotification: { title: string; message: string; type: 'info' | 'success' | 'warning' | 'error' } | null;
   dismissAdminNotification: () => void;
@@ -187,15 +189,10 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return localStorage.getItem('token') || sessionStorage.getItem('token') || 'mock-jwt-token-scriet-sso';
   });
 
-  // Authoritative Server-Side Admin Authorization, Applications & Audit Logs
+  // Authoritative Server-Side Admin Authorization & Audit Logs (Controlled Exclusively by Super Admin)
   const [adminAuthorizations, setAdminAuthorizations] = useState<AdminAuthorization[]>(() => {
     const saved = localStorage.getItem(STORAGE_PREFIX + 'admin_authorizations');
     return saved ? JSON.parse(saved) : INITIAL_ADMIN_AUTHORIZATIONS;
-  });
-
-  const [adminApplications, setAdminApplications] = useState<AdminApplication[]>(() => {
-    const saved = localStorage.getItem(STORAGE_PREFIX + 'admin_applications');
-    return saved ? JSON.parse(saved) : INITIAL_ADMIN_APPLICATIONS;
   });
 
   const [adminAuditLogs, setAdminAuditLogs] = useState<AdminAuditLogEntry[]>(() => {
@@ -212,10 +209,6 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   useEffect(() => {
     localStorage.setItem(STORAGE_PREFIX + 'admin_authorizations', JSON.stringify(adminAuthorizations));
   }, [adminAuthorizations]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_PREFIX + 'admin_applications', JSON.stringify(adminApplications));
-  }, [adminApplications]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_PREFIX + 'admin_audit_logs', JSON.stringify(adminAuditLogs));
@@ -532,21 +525,151 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     },
   ]);
 
-  // Real-Time Bus Subscription for Cross-Tab / Cross-Window Sync
+  // Initial State Sync from Authoritative Server
+  useEffect(() => {
+    fetch('/api/state')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data) {
+          if (data.eventStatus) setEventStatusState(data.eventStatus);
+          if (data.serverClock) {
+            setServerTimeRemainingSeconds(data.serverClock.timeRemainingSeconds);
+            setIsClockRunning(data.serverClock.isClockRunning);
+          }
+          if (data.teams) setTeams(data.teams);
+          if (data.ledger) setLedger(data.ledger);
+          if (data.marketItems) setMarketItems(data.marketItems);
+          if (data.inventory) setInventory(data.inventory);
+          if (data.crisisCards) setCrisisCards(data.crisisCards);
+          if (data.activeCrisis) setActiveCrisis(data.activeCrisis);
+          if (data.activeAuction) setActiveAuction(data.activeAuction);
+          if (data.auctionBids) setAuctionBids(data.auctionBids);
+          if (data.adminAuthorizations) setAdminAuthorizations(data.adminAuthorizations);
+          if (data.adminAuditLogs) setAdminAuditLogs(data.adminAuditLogs);
+          if (data.announcements) setAnnouncements(data.announcements);
+        }
+      })
+      .catch((err) => console.warn('Could not sync initial state from backend:', err));
+  }, []);
+
+  // Real-Time Bus Subscription for Cross-Tab / Cross-Window & SSE Server Sync
   useEffect(() => {
     const unsub = realtimeBus.on('*', (evt) => {
-      if (evt.type === 'EVENT_STATE_CHANGED') {
-        setEventStatusState(evt.payload.status);
-      } else if (evt.type === 'CLOCK_SYNC') {
-        setServerTimeRemainingSeconds(evt.payload.seconds);
-        setIsClockRunning(evt.payload.isRunning);
-      } else if (evt.type === 'LOCKDOWN_TRIGGERED') {
-        setIsLockdownActive(true);
-        setEventStatusState('LOCKDOWN');
-      } else if (evt.type === 'SIMULATION_RESET') {
-        setTeams(INITIAL_TEAMS);
-        setMarketItems(INITIAL_MARKET_ITEMS);
-        setPurchaseProposals([]);
+      const p = evt.payload;
+      switch (evt.type) {
+        case 'EVENT_STATE_CHANGED':
+          setEventStatusState(p.eventStatus || p.status);
+          break;
+        case 'CLOCK_SYNC':
+          if (p.timeRemainingSeconds !== undefined) setServerTimeRemainingSeconds(p.timeRemainingSeconds);
+          else if (p.seconds !== undefined) setServerTimeRemainingSeconds(p.seconds);
+          if (p.isClockRunning !== undefined) setIsClockRunning(p.isClockRunning);
+          else if (p.isRunning !== undefined) setIsClockRunning(p.isRunning);
+          break;
+        case 'PRICE_UPDATED':
+          if (p.items) {
+            setMarketItems(p.items);
+          } else if (p.sku && p.currentPrice !== undefined) {
+            setMarketItems((prev) =>
+              prev.map((item) =>
+                item.sku === p.sku
+                  ? { ...item, currentPrice: p.currentPrice, priceChangePct: p.priceChangePct }
+                  : item
+              )
+            );
+          }
+          break;
+        case 'STOCK_UPDATED':
+          if (p.items) {
+            setMarketItems(p.items);
+          } else if (p.sku && p.stockRemaining !== undefined) {
+            setMarketItems((prev) =>
+              prev.map((item) =>
+                item.sku === p.sku
+                  ? { ...item, stockRemaining: p.stockRemaining, status: p.status || item.status }
+                  : item
+              )
+            );
+          }
+          break;
+        case 'PURCHASE_COMMITTED':
+          if (p.ledgerEntry) {
+            setLedger((prev) => [p.ledgerEntry, ...prev.filter((e) => e.id !== p.ledgerEntry.id)]);
+          }
+          if (p.inventoryItem) {
+            setInventory((prev) => [p.inventoryItem, ...prev.filter((i) => i.id !== p.inventoryItem.id)]);
+          }
+          if (p.sku) {
+            setMarketItems((prev) =>
+              prev.map((item) =>
+                item.sku === p.sku
+                  ? { ...item, stockRemaining: Math.max(0, item.stockRemaining - 1) }
+                  : item
+              )
+            );
+          }
+          break;
+        case 'FUNDS_UPDATED':
+          if (p.entry) {
+            setLedger((prev) => [p.entry, ...prev.filter((e) => e.id !== p.entry.id)]);
+          }
+          break;
+        case 'CRISIS_DISPATCHED':
+          if (p.crisis) setActiveCrisis(p.crisis);
+          break;
+        case 'CRISIS_RESPONSE_RECEIVED':
+          if (p.activeCrisis) setActiveCrisis(p.activeCrisis);
+          break;
+        case 'AUCTION_OPENED':
+          if (p.auction) {
+            setActiveAuction(p.auction);
+            setAuctionBids([]);
+          }
+          break;
+        case 'AUCTION_BID_RECEIVED':
+          if (p.bid) {
+            setAuctionBids((prev) => [p.bid, ...prev.filter((b) => b.id !== p.bid.id)]);
+          }
+          break;
+        case 'AUCTION_CLOSED':
+          if (p.auction) setActiveAuction(p.auction);
+          break;
+        case 'ADMIN_AUTH_UPDATED':
+        case 'ADMIN_VERIFIED':
+        case 'ADMIN_SUSPENDED':
+        case 'ADMIN_REVOKED':
+        case 'ADMIN_REACTIVATED':
+          if (p.authorizations) {
+            setAdminAuthorizations(p.authorizations);
+            localStorage.setItem(STORAGE_PREFIX + 'admin_authorizations', JSON.stringify(p.authorizations));
+          }
+          if (p.auditLogs) {
+            setAdminAuditLogs(p.auditLogs);
+            localStorage.setItem(STORAGE_PREFIX + 'admin_audit_logs', JSON.stringify(p.auditLogs));
+          }
+          break;
+        case 'ANNOUNCEMENT_BROADCAST':
+          if (p.announcement) {
+            setAnnouncements((prev) => [p.announcement, ...prev.filter((a) => a.id !== p.announcement.id)]);
+          }
+          break;
+        case 'SCORE_SUBMITTED':
+          if (p.score) {
+            setJudgeScores((prev) => [p.score, ...prev.filter((s) => s.id !== p.score.id)]);
+          }
+          break;
+        case 'LOCKDOWN_TRIGGERED':
+          setIsLockdownActive(true);
+          setEventStatusState('LOCKDOWN');
+          break;
+        case 'SIMULATION_RESET':
+          setTeams(INITIAL_TEAMS);
+          setMarketItems(INITIAL_MARKET_ITEMS);
+          setPurchaseProposals([]);
+          setLedger([]);
+          setActiveCrisis(null);
+          setActiveAuction(null);
+          break;
       }
     });
 
@@ -1473,34 +1596,26 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       );
 
       if (authRecord) {
-        if (authRecord.active && authRecord.verified) {
-          return 'ADMIN_VERIFIED';
+        if (authRecord.status === 'ACTIVE' || (authRecord.active && authRecord.verified)) {
+          return 'ACTIVE';
         }
-        if (!authRecord.active) {
-          return 'ADMIN_SUSPENDED';
+        if (authRecord.status === 'SUSPENDED') {
+          return 'SUSPENDED';
+        }
+        if (authRecord.status === 'REVOKED') {
+          return 'REVOKED';
         }
       }
 
-      // 2. Check AdminApplications list
-      const appRecord = adminApplications.find(
-        (app) => app.email.toLowerCase() === targetEmail || app.userId === targetId
-      );
-
-      if (appRecord) {
-        if (appRecord.status === 'PENDING') return 'ADMIN_PENDING';
-        if (appRecord.status === 'REJECTED') return 'ADMIN_REJECTED';
-        if (appRecord.status === 'SUSPENDED') return 'ADMIN_SUSPENDED';
-        if (appRecord.status === 'APPROVED') return 'ADMIN_VERIFIED';
-      }
-
-      return 'NORMAL_USER';
+      return 'NONE';
     },
-    [currentUser.email, currentUser.id, adminAuthorizations, adminApplications]
+    [currentUser.email, currentUser.id, adminAuthorizations]
   );
 
   const isAdminVerified = useCallback(
     (identifier?: string): boolean => {
-      return getAdminStatus(identifier) === 'ADMIN_VERIFIED';
+      const status = getAdminStatus(identifier);
+      return status === 'ACTIVE' || status === 'ADMIN_VERIFIED';
     },
     [getAdminStatus]
   );
@@ -1512,353 +1627,162 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       const authRecord = adminAuthorizations.find(
         (a) => a.email.toLowerCase() === targetEmail || a.userId === targetId
       );
-      return !!authRecord && authRecord.active && authRecord.verified && authRecord.role === 'SUPER_ADMIN';
+      const isMatch = targetEmail === BOOTSTRAP_ADMIN_EMAIL.toLowerCase() || (!!authRecord && authRecord.role === 'SUPER_ADMIN');
+      const isActive = !authRecord ? true : (authRecord.status === 'ACTIVE' || Boolean(authRecord.active));
+      return Boolean(isMatch && isActive);
     },
     [currentUser.email, currentUser.id, adminAuthorizations]
   );
 
-  const submitAdminApplication = useCallback(
-    (data: { reason: string; requestedRole: AdminPermissionRole }) => {
-      // Prevent duplicate pending applications
-      const existingPending = adminApplications.find(
-        (a) =>
-          (a.email.toLowerCase() === currentUser.email.toLowerCase() || a.userId === currentUser.id) &&
-          a.status === 'PENDING'
-      );
-      if (existingPending) {
-        return {
-          success: false,
-          message: 'You already have an active admin application pending verification.',
-        };
-      }
-
-      // If already verified
-      if (isAdminVerified(currentUser.email)) {
-        return {
-          success: false,
-          message: 'You are already an approved and verified administrator.',
-        };
-      }
-
-      const newApp: AdminApplication = {
-        id: 'app-' + Math.random().toString(36).substring(2, 9),
-        userId: currentUser.id,
-        name: currentUser.name,
-        email: currentUser.email,
-        status: 'PENDING',
-        reason: data.reason,
-        requestedRole: data.requestedRole,
-        submittedAt: new Date().toISOString(),
-      };
-
-      const newAudit: AdminAuditLogEntry = {
-        id: 'audit-' + Math.random().toString(36).substring(2, 9),
-        actorUserId: currentUser.id,
-        actorEmail: currentUser.email,
-        targetUserId: currentUser.id,
-        targetEmail: currentUser.email,
-        applicationId: newApp.id,
-        action: 'ADMIN_APPLICATION_SUBMITTED',
-        beforeStatus: getAdminStatus(currentUser.email),
-        afterStatus: 'ADMIN_PENDING',
-        timestamp: new Date().toISOString(),
-        reason: data.reason,
-      };
-
-      setAdminApplications((prev) => [newApp, ...prev]);
-      setAdminAuditLogs((prev) => [newAudit, ...prev]);
-
-      realtimeBus.emit('ADMIN_APPLICATION_SUBMITTED', { application: newApp }, currentUser.name);
-
-      setAdminNotification({
-        title: 'Admin Application Submitted',
-        message: 'Your admin application has been submitted and is awaiting verification.',
-        type: 'info',
-      });
-
-      return {
-        success: true,
-        message: 'Your admin application has been submitted and is awaiting verification.',
-      };
-    },
-    [currentUser, adminApplications, isAdminVerified, getAdminStatus]
-  );
-
-  const approveAdminApplication = useCallback(
-    (applicationId: string, roleOverride?: AdminPermissionRole) => {
-      if (!isAdminVerified(currentUser.email)) {
-        return { success: false, message: '403 Forbidden: Only verified administrators can approve applications.' };
-      }
-
-      const app = adminApplications.find((a) => a.id === applicationId);
-      if (!app) {
-        return { success: false, message: 'Application not found.' };
-      }
-
-      // Prevent self-approval
-      if (app.userId === currentUser.id || app.email.toLowerCase() === currentUser.email.toLowerCase()) {
-        return { success: false, message: 'Security violation: Self-approval of admin applications is strictly prohibited.' };
-      }
-
-      const assignedRole = roleOverride || app.requestedRole || 'ADMIN';
-      const now = new Date().toISOString();
-
-      setAdminApplications((prev) =>
-        prev.map((a) =>
-          a.id === applicationId
-            ? {
-                ...a,
-                status: 'APPROVED',
-                reviewedAt: now,
-                reviewedBy: currentUser.name,
-                reviewedByEmail: currentUser.email,
-              }
-            : a
-        )
-      );
-
-      setAdminAuthorizations((prev) => {
-        const existingIndex = prev.findIndex(
-          (auth) => auth.email.toLowerCase() === app.email.toLowerCase() || auth.userId === app.userId
-        );
-        const newAuth: AdminAuthorization = {
-          id: existingIndex >= 0 ? prev[existingIndex].id : 'auth-' + Math.random().toString(36).substring(2, 9),
-          userId: app.userId,
-          email: app.email,
-          name: app.name,
-          role: assignedRole,
-          verified: true,
-          active: true,
-          grantedAt: now,
-          grantedBy: `${currentUser.name} (${currentUser.email})`,
-          notes: `Approved via admin application ${app.id}. Reason: ${app.reason}`,
-        };
-
-        if (existingIndex >= 0) {
-          const copy = [...prev];
-          copy[existingIndex] = newAuth;
-          return copy;
+  // Authoritative State Refresh from Backend (requirement 13)
+  const refreshAuthorizationState = useCallback(async () => {
+    try {
+      const res = await fetch('/api/state');
+      if (res.ok) {
+        const state = await res.json();
+        if (state.adminAuthorizations) {
+          setAdminAuthorizations(state.adminAuthorizations);
+          localStorage.setItem(STORAGE_PREFIX + 'admin_authorizations', JSON.stringify(state.adminAuthorizations));
         }
-        return [...prev, newAuth];
-      });
+        if (state.adminAuditLogs) {
+          setAdminAuditLogs(state.adminAuditLogs);
+          localStorage.setItem(STORAGE_PREFIX + 'admin_audit_logs', JSON.stringify(state.adminAuditLogs));
+        }
+      }
+    } catch {
+      // offline fallback
+    }
+  }, []);
 
-      const audit: AdminAuditLogEntry = {
-        id: 'audit-' + Math.random().toString(36).substring(2, 9),
-        actorUserId: currentUser.id,
-        actorEmail: currentUser.email,
-        targetUserId: app.userId,
-        targetEmail: app.email,
-        applicationId: app.id,
-        action: 'ADMIN_APPLICATION_APPROVED',
-        beforeStatus: app.status,
-        afterStatus: `APPROVED (${assignedRole})`,
-        timestamp: now,
-        reason: `Application approved by ${currentUser.name}`,
-      };
-      setAdminAuditLogs((prev) => [audit, ...prev]);
+  useEffect(() => {
+    const onFocus = () => {
+      refreshAuthorizationState();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshAuthorizationState]);
 
-      realtimeBus.emit(
-        'ADMIN_APPROVED',
-        {
-          targetEmail: app.email,
-          targetUserId: app.userId,
-          role: assignedRole,
-          reviewer: currentUser.name,
-        },
-        currentUser.name
-      );
-
-      return { success: true, message: `Application for ${app.name} (${app.email}) approved as ${assignedRole}.` };
+  // Super Admin Exclusive API Handlers
+  const searchUserByEmail = useCallback(
+    async (email: string) => {
+      try {
+        const res = await fetch(`/api/admin/search-user?email=${encodeURIComponent(email)}`, {
+          headers: {
+            'x-user-email': currentUser.email,
+          },
+        });
+        const data = await res.json();
+        return data;
+      } catch (err: any) {
+        return { found: false, error: err.message || 'Network communication error' };
+      }
     },
-    [currentUser, isAdminVerified, adminApplications]
+    [currentUser.email]
   );
 
-  const rejectAdminApplication = useCallback(
-    (applicationId: string, reason?: string) => {
-      if (!isAdminVerified(currentUser.email)) {
-        return { success: false, message: '403 Forbidden: Only verified administrators can reject applications.' };
+  const verifyAdminByEmail = useCallback(
+    async (targetEmail: string, role: AdminPermissionRole = 'ADMIN') => {
+      const normalized = targetEmail.trim().toLowerCase();
+      try {
+        const res = await fetch('/api/admin/verify', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-email': currentUser.email,
+          },
+          body: JSON.stringify({ email: normalized, role }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          await refreshAuthorizationState();
+          return { success: true, message: data.message };
+        }
+        return { success: false, message: data.error || data.message || 'Failed to verify admin' };
+      } catch (err: any) {
+        return { success: false, message: err.message || 'Network error' };
       }
-
-      const app = adminApplications.find((a) => a.id === applicationId);
-      if (!app) {
-        return { success: false, message: 'Application not found.' };
-      }
-
-      const now = new Date().toISOString();
-      const rejReason = reason || 'Requirements not met at this time.';
-
-      setAdminApplications((prev) =>
-        prev.map((a) =>
-          a.id === applicationId
-            ? {
-                ...a,
-                status: 'REJECTED',
-                reviewedAt: now,
-                reviewedBy: currentUser.name,
-                reviewedByEmail: currentUser.email,
-                rejectionReason: rejReason,
-              }
-            : a
-        )
-      );
-
-      const audit: AdminAuditLogEntry = {
-        id: 'audit-' + Math.random().toString(36).substring(2, 9),
-        actorUserId: currentUser.id,
-        actorEmail: currentUser.email,
-        targetUserId: app.userId,
-        targetEmail: app.email,
-        applicationId: app.id,
-        action: 'ADMIN_APPLICATION_REJECTED',
-        beforeStatus: app.status,
-        afterStatus: 'REJECTED',
-        timestamp: now,
-        reason: rejReason,
-      };
-      setAdminAuditLogs((prev) => [audit, ...prev]);
-
-      realtimeBus.emit(
-        'ADMIN_REJECTED',
-        {
-          targetEmail: app.email,
-          targetUserId: app.userId,
-          reason: rejReason,
-          reviewer: currentUser.name,
-        },
-        currentUser.name
-      );
-
-      return { success: true, message: `Application for ${app.name} rejected.` };
     },
-    [currentUser, isAdminVerified, adminApplications]
+    [currentUser.email, refreshAuthorizationState]
   );
 
-  const suspendAdminAccess = useCallback(
-    (targetUserIdOrEmail: string, reason?: string) => {
-      if (!isAdminVerified(currentUser.email)) {
-        return { success: false, message: '403 Forbidden: Only verified administrators can suspend admin access.' };
+  const suspendAdmin = useCallback(
+    async (targetEmail: string, reason: string = 'Suspended by Super Admin') => {
+      const normalized = targetEmail.trim().toLowerCase();
+      try {
+        const res = await fetch('/api/admin/suspend', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-email': currentUser.email,
+          },
+          body: JSON.stringify({ email: normalized, reason }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          await refreshAuthorizationState();
+          return { success: true, message: data.message };
+        }
+        return { success: false, message: data.error || data.message || 'Failed to suspend admin' };
+      } catch (err: any) {
+        return { success: false, message: err.message || 'Network error' };
       }
-
-      const identifier = targetUserIdOrEmail.toLowerCase().trim();
-      const target = adminAuthorizations.find(
-        (a) => a.email.toLowerCase() === identifier || a.userId === identifier
-      );
-
-      if (!target) {
-        return { success: false, message: 'Admin authorization record not found.' };
-      }
-
-      if (
-        target.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase() &&
-        currentUser.email.toLowerCase() !== BOOTSTRAP_ADMIN_EMAIL.toLowerCase()
-      ) {
-        return { success: false, message: 'Cannot suspend the bootstrap Super Admin.' };
-      }
-
-      const now = new Date().toISOString();
-      const suspReason = reason || 'Admin access suspended by administrator.';
-
-      setAdminAuthorizations((prev) =>
-        prev.map((a) =>
-          a.id === target.id
-            ? {
-                ...a,
-                active: false,
-                suspendedAt: now,
-                notes: suspReason,
-              }
-            : a
-        )
-      );
-
-      setAdminApplications((prev) =>
-        prev.map((app) =>
-          app.email.toLowerCase() === target.email.toLowerCase() || app.userId === target.userId
-            ? { ...app, status: 'SUSPENDED', rejectionReason: suspReason }
-            : app
-        )
-      );
-
-      const audit: AdminAuditLogEntry = {
-        id: 'audit-' + Math.random().toString(36).substring(2, 9),
-        actorUserId: currentUser.id,
-        actorEmail: currentUser.email,
-        targetUserId: target.userId,
-        targetEmail: target.email,
-        action: 'ADMIN_ACCESS_SUSPENDED',
-        beforeStatus: target.active ? 'ACTIVE' : 'SUSPENDED',
-        afterStatus: 'SUSPENDED',
-        timestamp: now,
-        reason: suspReason,
-      };
-      setAdminAuditLogs((prev) => [audit, ...prev]);
-
-      realtimeBus.emit('ADMIN_SUSPENDED', { targetEmail: target.email, reason: suspReason }, currentUser.name);
-
-      return { success: true, message: `Admin privileges suspended for ${target.name} (${target.email}).` };
     },
-    [currentUser, isAdminVerified, adminAuthorizations]
+    [currentUser.email, refreshAuthorizationState]
   );
 
-  const reactivateAdminAccess = useCallback(
-    (targetUserIdOrEmail: string, reason?: string) => {
-      if (!isAdminVerified(currentUser.email)) {
-        return { success: false, message: '403 Forbidden: Only verified administrators can reactivate admin access.' };
+  const revokeAdmin = useCallback(
+    async (targetEmail: string, reason: string = 'Revoked by Super Admin') => {
+      const normalized = targetEmail.trim().toLowerCase();
+      try {
+        const res = await fetch('/api/admin/revoke', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-email': currentUser.email,
+          },
+          body: JSON.stringify({ email: normalized, reason }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          await refreshAuthorizationState();
+          return { success: true, message: data.message };
+        }
+        return { success: false, message: data.error || data.message || 'Failed to revoke admin' };
+      } catch (err: any) {
+        return { success: false, message: err.message || 'Network error' };
       }
-
-      const identifier = targetUserIdOrEmail.toLowerCase().trim();
-      const target = adminAuthorizations.find(
-        (a) => a.email.toLowerCase() === identifier || a.userId === identifier
-      );
-
-      if (!target) {
-        return { success: false, message: 'Admin authorization record not found.' };
-      }
-
-      const now = new Date().toISOString();
-      const reactReason = reason || 'Admin privileges reactivated by administrator.';
-
-      setAdminAuthorizations((prev) =>
-        prev.map((a) =>
-          a.id === target.id
-            ? {
-                ...a,
-                active: true,
-                suspendedAt: undefined,
-                notes: reactReason,
-              }
-            : a
-        )
-      );
-
-      setAdminApplications((prev) =>
-        prev.map((app) =>
-          app.email.toLowerCase() === target.email.toLowerCase() || app.userId === target.userId
-            ? { ...app, status: 'APPROVED' }
-            : app
-        )
-      );
-
-      const audit: AdminAuditLogEntry = {
-        id: 'audit-' + Math.random().toString(36).substring(2, 9),
-        actorUserId: currentUser.id,
-        actorEmail: currentUser.email,
-        targetUserId: target.userId,
-        targetEmail: target.email,
-        action: 'ADMIN_ACCESS_REACTIVATED',
-        beforeStatus: 'SUSPENDED',
-        afterStatus: 'ACTIVE',
-        timestamp: now,
-        reason: reactReason,
-      };
-      setAdminAuditLogs((prev) => [audit, ...prev]);
-
-      realtimeBus.emit('ADMIN_REACTIVATED', { targetEmail: target.email, reason: reactReason }, currentUser.name);
-
-      return { success: true, message: `Admin privileges reactivated for ${target.name} (${target.email}).` };
     },
-    [currentUser, isAdminVerified, adminAuthorizations]
+    [currentUser.email, refreshAuthorizationState]
   );
+
+  const reactivateAdmin = useCallback(
+    async (targetEmail: string, reason: string = 'Reactivated by Super Admin') => {
+      const normalized = targetEmail.trim().toLowerCase();
+      try {
+        const res = await fetch('/api/admin/reactivate', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-user-email': currentUser.email,
+          },
+          body: JSON.stringify({ email: normalized, reason }),
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          await refreshAuthorizationState();
+          return { success: true, message: data.message };
+        }
+        return { success: false, message: data.error || data.message || 'Failed to reactivate admin' };
+      } catch (err: any) {
+        return { success: false, message: err.message || 'Network error' };
+      }
+    },
+    [currentUser.email, refreshAuthorizationState]
+  );
+
+  // Backward-compat aliases
+  const suspendAdminAccess = suspendAdmin;
+  const reactivateAdminAccess = reactivateAdmin;
 
   const loginWithEmail = useCallback(
     (email: string, name?: string) => {
@@ -1901,32 +1825,33 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
 
   // Real-time synchronization for authorization updates
   useEffect(() => {
-    const unsubApproved = realtimeBus.on('ADMIN_APPROVED', (evt) => {
+    const unsubVerified = realtimeBus.on('ADMIN_VERIFIED', (evt) => {
       const payload = evt.payload;
       if (
         payload?.targetEmail?.toLowerCase() === currentUser.email.toLowerCase() ||
         payload?.targetUserId === currentUser.id
       ) {
         setAdminNotification({
-          title: 'Admin Access Approved!',
-          message: 'Your Code.SCRIET admin access has been approved. The Admin Panel is now accessible.',
+          title: 'Admin Verification Granted!',
+          message: 'Your Code.SCRIET account has been verified as an administrator by the Super Admin.',
           type: 'success',
         });
-        setCurrentRole('ADMIN');
+        refreshAuthorizationState();
       }
     });
 
-    const unsubRejected = realtimeBus.on('ADMIN_REJECTED', (evt) => {
+    const unsubRevoked = realtimeBus.on('ADMIN_REVOKED', (evt) => {
       const payload = evt.payload;
       if (
         payload?.targetEmail?.toLowerCase() === currentUser.email.toLowerCase() ||
         payload?.targetUserId === currentUser.id
       ) {
         setAdminNotification({
-          title: 'Admin Access Request Rejected',
-          message: payload.reason || 'Your Code.SCRIET admin access request was rejected.',
-          type: 'warning',
+          title: 'Admin Access Revoked',
+          message: 'Your administrator authorization has been revoked by the Super Admin.',
+          type: 'error',
         });
+        refreshAuthorizationState();
       }
     });
 
@@ -1938,21 +1863,53 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       ) {
         setAdminNotification({
           title: 'Admin Access Suspended',
-          message: payload.reason || 'Your admin access has been suspended.',
+          message: payload.reason || 'Your admin access has been suspended by the Super Admin.',
           type: 'error',
         });
-        if (currentRole === 'ADMIN') {
-          setCurrentRole('CEO');
-        }
+        refreshAuthorizationState();
+      }
+    });
+
+    const unsubReactivated = realtimeBus.on('ADMIN_REACTIVATED', (evt) => {
+      const payload = evt.payload;
+      if (
+        payload?.targetEmail?.toLowerCase() === currentUser.email.toLowerCase() ||
+        payload?.targetUserId === currentUser.id
+      ) {
+        setAdminNotification({
+          title: 'Admin Access Reactivated',
+          message: 'Your admin access has been reactivated by the Super Admin.',
+          type: 'success',
+        });
+        refreshAuthorizationState();
       }
     });
 
     return () => {
-      unsubApproved();
-      unsubRejected();
+      unsubVerified();
+      unsubRevoked();
       unsubSuspended();
+      unsubReactivated();
     };
-  }, [currentUser.email, currentUser.id, currentRole]);
+  }, [currentUser.email, currentUser.id, currentRole, refreshAuthorizationState]);
+
+  const authorizationState: AuthorizationState = useMemo(() => {
+    const verified = isAdminVerified();
+    const superAdmin = isSuperAdmin();
+    const status = getAdminStatus();
+    const authRecord = adminAuthorizations.find(
+      (a) => a.email.toLowerCase() === currentUser.email.toLowerCase() || a.userId === currentUser.id
+    );
+    return {
+      isAuthenticated: currentRole !== 'PUBLIC',
+      isVerifiedAdmin: verified,
+      loading: false,
+      status,
+      role: superAdmin ? 'SUPER_ADMIN' : verified ? (authRecord?.role || 'ADMIN') : 'MEMBER',
+      user: currentUser,
+      authorization: authRecord || null,
+    };
+  }, [currentUser, currentRole, isAdminVerified, isSuperAdmin, getAdminStatus, adminAuthorizations]);
 
   const value = useMemo(
     () => ({
@@ -1963,6 +1920,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       switchUser,
       isLoggedIn: currentRole !== 'PUBLIC',
       logout,
+      authorizationState,
       eventStatus,
       setEventStatus,
       eventConfig,
@@ -2029,18 +1987,20 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       resetAndReseedSimulation,
       createSnapshot,
       restoreSnapshot,
-      // Admin Authorization & Verification
+      // Admin Authorization & Verification (Authoritative Super Admin Control)
       adminAuthorizations,
-      adminApplications,
       adminAuditLogs,
       getAdminStatus,
       isAdminVerified,
       isSuperAdmin,
-      submitAdminApplication,
-      approveAdminApplication,
-      rejectAdminApplication,
+      searchUserByEmail,
+      verifyAdminByEmail,
+      suspendAdmin,
+      revokeAdmin,
+      reactivateAdmin,
       suspendAdminAccess,
       reactivateAdminAccess,
+      refreshAuthorizationState,
       loginWithEmail,
       adminNotification,
       dismissAdminNotification,
@@ -2049,6 +2009,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       currentUser,
       authToken,
       currentRole,
+      authorizationState,
       switchUser,
       logout,
       eventStatus,
@@ -2115,16 +2076,18 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       createSnapshot,
       restoreSnapshot,
       adminAuthorizations,
-      adminApplications,
       adminAuditLogs,
       getAdminStatus,
       isAdminVerified,
       isSuperAdmin,
-      submitAdminApplication,
-      approveAdminApplication,
-      rejectAdminApplication,
+      searchUserByEmail,
+      verifyAdminByEmail,
+      suspendAdmin,
+      revokeAdmin,
+      reactivateAdmin,
       suspendAdminAccess,
       reactivateAdminAccess,
+      refreshAuthorizationState,
       loginWithEmail,
       adminNotification,
       dismissAdminNotification,
