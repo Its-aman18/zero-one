@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useSimulation } from '../services/simulationContext';
+import { commandSync } from '../services/commandSyncEngine';
 import { SimulationRole } from '../types';
 import {
   Users,
@@ -85,10 +86,34 @@ export const JoinOnboardingPage: React.FC<JoinOnboardingPageProps> = ({ onNaviga
   const handleComplete = () => {
     // Sync selected team
     const teamFound = teams.find((t) => t.teamCode === selectedTeamCode);
+    const targetTeamId = teamFound ? teamFound.id : currentTeam.id;
     if (teamFound) {
       setCurrentTeamId(teamFound.id);
     }
     setCurrentRole(selectedRole);
+
+    // Dispatch authoritative server commands
+    commandSync.dispatch('CLAIM_TEAM', {
+      teamId: targetTeamId,
+      teamCode: selectedTeamCode,
+      userId: currentUser.id,
+      userName: currentUser.name,
+    });
+
+    commandSync.dispatch('CLAIM_ROLE', {
+      teamId: targetTeamId,
+      role: selectedRole,
+      userId: currentUser.id,
+      userName: currentUser.name,
+    });
+
+    commandSync.dispatch('BIND_DEVICE', {
+      teamId: targetTeamId,
+      role: selectedRole,
+      deviceName: deviceName || 'Founder Primary Device (Bound)',
+      userId: currentUser.id,
+    });
+
     setJoinedSuccess(true);
     setTimeout(() => {
       onNavigate('team-dashboard');

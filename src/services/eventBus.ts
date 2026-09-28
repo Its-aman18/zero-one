@@ -34,6 +34,12 @@ export type SimulationEventType =
   | 'ADMIN_SUSPENDED'
   | 'ADMIN_REVOKED'
   | 'ADMIN_REACTIVATED'
+  | 'SERVER_TIME_SYNC'
+  | 'PURCHASE_APPROVED'
+  | 'PURCHASE_REJECTED'
+  | 'ROLE_CLAIMED'
+  | 'LOCKDOWN_RELEASED'
+  | 'SNAPSHOT_RESTORED'
   | 'CONNECTED';
 
 export interface SimulationEvent<T = any> {

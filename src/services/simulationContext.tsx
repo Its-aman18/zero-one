@@ -41,6 +41,8 @@ import {
   AuthorizationState,
 } from './adminAuthService';
 import { realtimeBus } from './eventBus';
+import { offlineStorage } from './offlineStorage';
+import { commandSync } from './commandSyncEngine';
 
 export interface LiveScreenConfig {
   showLeaderboard: boolean;
@@ -525,12 +527,40 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     },
   ]);
 
-  // Initial State Sync from Authoritative Server
+  // Initial State Sync from Authoritative Server with Offline-First IndexedDB Cache
   useEffect(() => {
+    // 1. First, restore from local IndexedDB state replica (instant offline UI)
+    offlineStorage.getStateReplica<any>('authoritative_state').then((cached) => {
+      if (cached) {
+        if (cached.eventStatus) setEventStatusState(cached.eventStatus);
+        if (cached.serverClock) {
+          setServerTimeRemainingSeconds(cached.serverClock.timeRemainingSeconds);
+          setIsClockRunning(cached.serverClock.isClockRunning);
+        }
+        if (cached.teams) setTeams(cached.teams);
+        if (cached.ledger) setLedger(cached.ledger);
+        if (cached.marketItems) setMarketItems(cached.marketItems);
+        if (cached.inventory) setInventory(cached.inventory);
+        if (cached.purchaseProposals) setPurchaseProposals(cached.purchaseProposals);
+        if (cached.crisisCards) setCrisisCards(cached.crisisCards);
+        if (cached.activeCrisis !== undefined) setActiveCrisis(cached.activeCrisis);
+        if (cached.activeAuction !== undefined) setActiveAuction(cached.activeAuction);
+        if (cached.auctionBids) setAuctionBids(cached.auctionBids);
+        if (cached.canvas) setCanvas(cached.canvas);
+        if (cached.artifacts) setArtifacts(cached.artifacts);
+        if (cached.adminAuthorizations) setAdminAuthorizations(cached.adminAuthorizations);
+        if (cached.adminAuditLogs) setAdminAuditLogs(cached.adminAuditLogs);
+        if (cached.announcements) setAnnouncements(cached.announcements);
+        if (cached.isLockdownActive !== undefined) setIsLockdownActive(cached.isLockdownActive);
+      }
+    });
+
+    // 2. Query authoritative server state
     fetch('/api/state')
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data) {
+          offlineStorage.saveStateReplica('authoritative_state', data);
           if (data.eventStatus) setEventStatusState(data.eventStatus);
           if (data.serverClock) {
             setServerTimeRemainingSeconds(data.serverClock.timeRemainingSeconds);
@@ -540,13 +570,17 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           if (data.ledger) setLedger(data.ledger);
           if (data.marketItems) setMarketItems(data.marketItems);
           if (data.inventory) setInventory(data.inventory);
+          if (data.purchaseProposals) setPurchaseProposals(data.purchaseProposals);
           if (data.crisisCards) setCrisisCards(data.crisisCards);
-          if (data.activeCrisis) setActiveCrisis(data.activeCrisis);
-          if (data.activeAuction) setActiveAuction(data.activeAuction);
+          if (data.activeCrisis !== undefined) setActiveCrisis(data.activeCrisis);
+          if (data.activeAuction !== undefined) setActiveAuction(data.activeAuction);
           if (data.auctionBids) setAuctionBids(data.auctionBids);
+          if (data.canvas) setCanvas(data.canvas);
+          if (data.artifacts) setArtifacts(data.artifacts);
           if (data.adminAuthorizations) setAdminAuthorizations(data.adminAuthorizations);
           if (data.adminAuditLogs) setAdminAuditLogs(data.adminAuditLogs);
           if (data.announcements) setAnnouncements(data.announcements);
+          if (data.isLockdownActive !== undefined) setIsLockdownActive(data.isLockdownActive);
         }
       })
       .catch((err) => console.warn('Could not sync initial state from backend:', err));
@@ -561,10 +595,13 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           setEventStatusState(p.eventStatus || p.status);
           break;
         case 'CLOCK_SYNC':
+        case 'SERVER_TIME_SYNC':
           if (p.timeRemainingSeconds !== undefined) setServerTimeRemainingSeconds(p.timeRemainingSeconds);
+          else if (p.remainingSeconds !== undefined) setServerTimeRemainingSeconds(p.remainingSeconds);
           else if (p.seconds !== undefined) setServerTimeRemainingSeconds(p.seconds);
           if (p.isClockRunning !== undefined) setIsClockRunning(p.isClockRunning);
           else if (p.isRunning !== undefined) setIsClockRunning(p.isRunning);
+          if (p.state) setEventStatusState(p.state);
           break;
         case 'PRICE_UPDATED':
           if (p.items) {
@@ -592,6 +629,29 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             );
           }
           break;
+        case 'PURCHASE_PROPOSED':
+          if (p.proposal) {
+            setPurchaseProposals((prev) => [p.proposal, ...prev.filter((x) => x.id !== p.proposal.id)]);
+          }
+          break;
+        case 'PURCHASE_APPROVED':
+          if (p.proposal) {
+            setPurchaseProposals((prev) =>
+              prev.map((x) => (x.id === p.proposal.id ? { ...x, status: 'COMMITTED' } : x))
+            );
+          }
+          break;
+        case 'PURCHASE_REJECTED':
+          if (p.proposal) {
+            setPurchaseProposals((prev) =>
+              prev.map((x) =>
+                x.id === p.proposal.id
+                  ? { ...x, status: 'REJECTED', rejectionNote: p.proposal.rejectionNote }
+                  : x
+              )
+            );
+          }
+          break;
         case 'PURCHASE_COMMITTED':
           if (p.ledgerEntry) {
             setLedger((prev) => [p.ledgerEntry, ...prev.filter((e) => e.id !== p.ledgerEntry.id)]);
@@ -609,6 +669,11 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             );
           }
           break;
+        case 'PURCHASE_REVERSED':
+          if (p.revEntry) {
+            setLedger((prev) => [p.revEntry, ...prev.filter((e) => e.id !== p.revEntry.id)]);
+          }
+          break;
         case 'FUNDS_UPDATED':
           if (p.entry) {
             setLedger((prev) => [p.entry, ...prev.filter((e) => e.id !== p.entry.id)]);
@@ -619,6 +684,9 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           break;
         case 'CRISIS_RESPONSE_RECEIVED':
           if (p.activeCrisis) setActiveCrisis(p.activeCrisis);
+          break;
+        case 'CRISIS_TIMEOUT':
+          if (p.crisis) setActiveCrisis({ ...p.crisis, status: 'TIMEOUT' });
           break;
         case 'AUCTION_OPENED':
           if (p.auction) {
@@ -633,6 +701,26 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           break;
         case 'AUCTION_CLOSED':
           if (p.auction) setActiveAuction(p.auction);
+          break;
+        case 'TRADE_PROPOSED':
+          if (p.trade) {
+            setTrades((prev) => [p.trade, ...prev.filter((t) => t.id !== p.trade.id)]);
+          }
+          break;
+        case 'TRADE_COMMITTED':
+          if (p.trade) {
+            setTrades((prev) =>
+              prev.map((t) => (t.id === p.trade.id ? { ...t, status: 'ACCEPTED' } : t))
+            );
+          }
+          break;
+        case 'CANVAS_UPDATED':
+          if (p.canvas) setCanvas(p.canvas);
+          break;
+        case 'ARTIFACT_SUBMITTED':
+          if (p.artifact) {
+            setArtifacts((prev) => [p.artifact, ...prev.filter((a) => a.id !== p.artifact.id)]);
+          }
           break;
         case 'ADMIN_AUTH_UPDATED':
         case 'ADMIN_VERIFIED':
@@ -658,17 +746,51 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             setJudgeScores((prev) => [p.score, ...prev.filter((s) => s.id !== p.score.id)]);
           }
           break;
+        case 'ROLE_CLAIMED':
+        case 'ROLE_REASSIGNED':
+          // Re-fetch state to get latest team roster
+          fetch('/api/state')
+            .then((r) => r.json())
+            .then((st) => {
+              if (st && st.teams) setTeams(st.teams);
+            })
+            .catch(() => {});
+          break;
         case 'LOCKDOWN_TRIGGERED':
           setIsLockdownActive(true);
           setEventStatusState('LOCKDOWN');
           break;
+        case 'LOCKDOWN_RELEASED':
+          setIsLockdownActive(false);
+          break;
+        case 'RESULTS_REVEALED':
+          setEventStatusState('REVEAL');
+          break;
+        case 'SNAPSHOT_RESTORED':
         case 'SIMULATION_RESET':
-          setTeams(INITIAL_TEAMS);
-          setMarketItems(INITIAL_MARKET_ITEMS);
-          setPurchaseProposals([]);
-          setLedger([]);
-          setActiveCrisis(null);
-          setActiveAuction(null);
+          fetch('/api/state')
+            .then((r) => r.json())
+            .then((st) => {
+              if (st) {
+                setTeams(st.teams || INITIAL_TEAMS);
+                setMarketItems(st.marketItems || INITIAL_MARKET_ITEMS);
+                setPurchaseProposals(st.purchaseProposals || []);
+                setLedger(st.ledger || []);
+                setActiveCrisis(st.activeCrisis || null);
+                setActiveAuction(st.activeAuction || null);
+                setCanvas(st.canvas);
+                setArtifacts(st.artifacts || []);
+                setJudgeScores(st.judgeScores || []);
+                setAnnouncements(st.announcements || []);
+                setEventStatusState(st.eventStatus || 'ROUND_2');
+                setIsLockdownActive(Boolean(st.isLockdownActive));
+                if (st.serverClock) {
+                  setServerTimeRemainingSeconds(st.serverClock.timeRemainingSeconds);
+                  setIsClockRunning(st.serverClock.isClockRunning);
+                }
+              }
+            })
+            .catch(() => {});
           break;
       }
     });
@@ -769,10 +891,15 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const setEventStatus = useCallback(
     (status: EventStatus) => {
       setEventStatusState(status);
+      commandSync.dispatch('CHANGE_EVENT_STATE', { status }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        role: 'ADMIN',
+      });
       realtimeBus.emit('EVENT_STATE_CHANGED', { status }, currentUser.name);
       logAuditAction('EVENT_STATE_CHANGED', 'ALL_SYSTEMS', `Advanced state to ${status}`, 'ADMIN');
     },
-    [currentUser.name, logAuditAction]
+    [currentUser.id, currentUser.email, currentUser.name, logAuditAction]
   );
 
   // Clock operations
@@ -818,10 +945,15 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
 
       setLedger((prev) => [entry, ...prev]);
+      commandSync.dispatch('MANUAL_LEDGER_ADJUSTMENT', { teamId, type, amount, reason }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        role: 'ADMIN',
+      });
       logAuditAction('MANUAL_BALANCE_ADJUSTMENT', teamId, `${type} of ₹${amount.toLocaleString('en-IN')}: ${reason}`, 'ADMIN');
       realtimeBus.emit('PURCHASE_COMMITTED', { entry }, currentUser.name);
     },
-    [currentTeam.currentRound, currentUser.id, currentUser.name, logAuditAction]
+    [currentTeam.currentRound, currentUser.id, currentUser.email, currentUser.name, logAuditAction]
   );
 
   // Grant Loan (Rule 32)
@@ -843,10 +975,15 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
 
       setLedger((prev) => [entry, ...prev]);
+      commandSync.dispatch('GRANT_LOAN', { teamId, principal, interestPct }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        role: 'ADMIN',
+      });
       logAuditAction('LOAN_CREATED', teamId, `Disbursed loan ₹${principal.toLocaleString('en-IN')} @ ${interestPct}%`, 'ADMIN');
       realtimeBus.emit('PURCHASE_COMMITTED', { entry }, currentUser.name);
     },
-    [currentTeam.currentRound, currentUser.id, currentUser.name, logAuditAction]
+    [currentTeam.currentRound, currentUser.id, currentUser.email, currentUser.name, logAuditAction]
   );
 
   // Propose Purchase Flow
@@ -887,6 +1024,19 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         };
 
         setPurchaseProposals((prev) => [proposal, ...prev]);
+        commandSync.dispatch('PROPOSE_PURCHASE', {
+          teamId: currentTeamId,
+          sku: item.sku,
+          reasonCategory,
+          proposedByRole: currentRole,
+          idempotencyKey,
+        }, {
+          userId: currentUser.id,
+          userEmail: currentUser.email,
+          teamId: currentTeamId,
+          role: currentRole as any,
+        });
+
         realtimeBus.emit('PURCHASE_PROPOSED', { proposal }, currentUser.name);
         logAuditAction('PURCHASE_PROPOSED', item.name, `Proposed spending ₹${item.currentPrice.toLocaleString('en-IN')} on ${item.name} (${reasonCategory})`);
         return {
@@ -931,6 +1081,19 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setLedger((prev) => [ledgerEntry, ...prev]);
       setInventory((prev) => [newInvItem, ...prev]);
 
+      commandSync.dispatch('PROPOSE_PURCHASE', {
+        teamId: currentTeamId,
+        sku: item.sku,
+        reasonCategory,
+        proposedByRole: currentRole,
+        idempotencyKey,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: currentTeamId,
+        role: currentRole as any,
+      });
+
       realtimeBus.emit('PURCHASE_COMMITTED', { ledgerEntry, inventoryItem: newInvItem }, currentUser.name);
       logAuditAction('PURCHASE_COMMITTED', item.name, `Bought ${item.name} for ₹${item.currentPrice.toLocaleString('en-IN')}`);
 
@@ -939,7 +1102,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         message: `Successfully acquired ${item.name} for ₹${item.currentPrice.toLocaleString('en-IN')}!`,
       };
     },
-    [isLockdownActive, eventStatus, marketItems, getBalance, eventConfig.twoKeyApprovalThreshold, currentTeamId, currentUser.id, currentUser.name, currentRole, currentTeam.currentRound, logAuditAction]
+    [isLockdownActive, eventStatus, marketItems, getBalance, eventConfig.twoKeyApprovalThreshold, currentTeamId, currentUser.id, currentUser.email, currentUser.name, currentRole, currentTeam.currentRound, logAuditAction]
   );
 
   const approveProposal = useCallback(
@@ -994,12 +1157,21 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         prev.map((p) => (p.id === proposalId ? { ...p, status: 'COMMITTED', decidedAt: new Date().toISOString() } : p))
       );
 
+      commandSync.dispatch('APPROVE_PURCHASE', {
+        proposalId,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: proposal.teamId,
+        role: currentRole as any,
+      });
+
       realtimeBus.emit('PURCHASE_COMMITTED', { ledgerEntry, inventoryItem: inv }, currentUser.name);
       logAuditAction('PURCHASE_COMMITTED', proposal.itemName, `CEO Approved spending ₹${proposal.price.toLocaleString('en-IN')}`);
 
       return { success: true, message: `Proposal for ${proposal.itemName} approved and committed to ledger.` };
     },
-    [purchaseProposals, marketItems, getBalance, currentTeam.currentRound, currentUser.id, currentUser.name, logAuditAction]
+    [purchaseProposals, marketItems, getBalance, currentTeam.currentRound, currentUser.id, currentUser.email, currentUser.name, currentRole, logAuditAction]
   );
 
   const rejectProposal = useCallback(
@@ -1011,10 +1183,21 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
             : p
         )
       );
+
+      commandSync.dispatch('REJECT_PURCHASE', {
+        proposalId,
+        note,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: currentTeamId,
+        role: currentRole as any,
+      });
+
       logAuditAction('PURCHASE_REJECTED', proposalId, `Rejected proposal. Note: ${note || 'None'}`);
       return { success: true, message: 'Proposal rejected.' };
     },
-    [logAuditAction]
+    [currentTeamId, currentUser.id, currentUser.email, currentRole, logAuditAction]
   );
 
   const reversePurchase = useCallback(
@@ -1058,11 +1241,20 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         return prev;
       });
 
+      commandSync.dispatch('REVERSE_PURCHASE', {
+        ledgerEntryId,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: originalEntry.teamId,
+        role: currentRole as any,
+      });
+
       realtimeBus.emit('PURCHASE_REVERSED', { reversalEntry }, currentUser.name);
       logAuditAction('PURCHASE_REVERSED', originalEntry.id, `Reversed ₹${originalEntry.amount.toLocaleString('en-IN')}`);
       return { success: true, message: 'Purchase successfully reversed and credited back to capital.' };
     },
-    [ledger, eventConfig.undoWindowSeconds, currentUser.id, currentUser.name, currentRole, logAuditAction]
+    [ledger, eventConfig.undoWindowSeconds, currentUser.id, currentUser.email, currentUser.name, currentRole, logAuditAction]
   );
 
   // Market management (Admin)
@@ -1172,15 +1364,27 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
 
       setActiveCrisis(resolved);
+
+      commandSync.dispatch('SUBMIT_CRISIS_RESPONSE', {
+        teamId: currentTeamId,
+        optionId,
+        tradeoff,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: currentTeamId,
+        role: currentRole as any,
+      });
+
       realtimeBus.emit('CRISIS_RESPONSE_RECEIVED', { assignment: resolved }, currentUser.name);
       logAuditAction('CRISIS_RESPONSE_SUBMITTED', activeCrisis.crisis.title, `Selected: ${selectedOption.label}. Tradeoff: ${tradeoff}`);
 
       return { success: true, message: 'Crisis response submitted! Strategy logged and health updated.' };
     },
-    [activeCrisis, currentTeamId, currentTeam.currentRound, currentUser.id, currentUser.name, currentRole, logAuditAction]
+    [activeCrisis, currentTeamId, currentTeam.currentRound, currentUser.id, currentUser.email, currentUser.name, currentRole, logAuditAction]
   );
 
-  // Canvas update with autosave
+  // Canvas update with autosave and IndexedDB draft
   const updateCanvasField = useCallback(
     (field: keyof Omit<StartupCanvas, 'teamId' | 'lastSavedAt' | 'lastSavedBy' | 'version'>, value: string) => {
       setCanvas((prev) => {
@@ -1189,16 +1393,27 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
           [field]: value,
           lastSavedAt: new Date().toISOString(),
           lastSavedBy: `${currentUser.name} (${currentRole})`,
-          version: prev.version + 1,
+          version: (prev.version || 1) + 1,
         };
+        offlineStorage.saveCanvasDraft(prev.teamId, updated);
+        commandSync.dispatch('SUBMIT_CANVAS', {
+          teamId: prev.teamId,
+          canvas: updated,
+          expectedVersion: prev.version,
+        }, {
+          userId: currentUser.id,
+          userEmail: currentUser.email,
+          teamId: prev.teamId,
+          role: currentRole as any,
+        });
         realtimeBus.emit('CANVAS_UPDATED', { field, value, teamId: prev.teamId }, currentUser.name);
         return updated;
       });
     },
-    [currentUser.name, currentRole]
+    [currentUser.id, currentUser.email, currentUser.name, currentRole]
   );
 
-  // Artifact submission
+  // Artifact submission with SHA-256 hash & command sync
   const submitArtifact = useCallback(
     (submission: Omit<ArtifactSubmission, 'id' | 'submittedAt'>) => {
       const newArt: ArtifactSubmission = {
@@ -1207,10 +1422,20 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         submittedAt: new Date().toISOString(),
       };
       setArtifacts((prev) => [newArt, ...prev]);
+
+      commandSync.dispatch('SUBMIT_ARTIFACT', {
+        ...submission,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: currentTeamId,
+        role: currentRole as any,
+      });
+
       realtimeBus.emit('ARTIFACT_SUBMITTED', { artifact: newArt }, currentUser.name);
       logAuditAction('ARTIFACT_SUBMITTED', submission.title, `${submission.kind} submitted by ${submission.submittedBy}`);
     },
-    [currentUser.name, logAuditAction]
+    [currentTeamId, currentUser.id, currentUser.email, currentUser.name, currentRole, logAuditAction]
   );
 
   // Auction launch & close
@@ -1228,10 +1453,23 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
       setActiveAuction(auc);
       setAuctionBids([]);
+
+      commandSync.dispatch('OPEN_AUCTION', {
+        title,
+        description,
+        itemSku,
+        minBid,
+        durationMinutes,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        role: 'ADMIN',
+      });
+
       realtimeBus.emit('AUCTION_OPENED', { auction: auc }, currentUser.name);
       logAuditAction('AUCTION_OPENED', auc.id, `Opened auction "${title}" with min bid ₹${minBid}`, 'ADMIN');
     },
-    [currentUser.name, logAuditAction]
+    [currentUser.id, currentUser.email, currentUser.name, logAuditAction]
   );
 
   const closeAuction = useCallback(() => {
@@ -1268,11 +1506,17 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       setLedger((prev) => [debitEntry, ...prev]);
     }
 
+    commandSync.dispatch('CLOSE_AUCTION', {}, {
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      role: 'ADMIN',
+    });
+
     realtimeBus.emit('AUCTION_CLOSED', { auction: closedAuc }, currentUser.name);
     logAuditAction('AUCTION_CLOSED', activeAuction.id, `Closed auction. Winner: ${winner?.teamName || 'None'} @ ₹${winner?.amount || 0}`, 'ADMIN');
 
     return { winnerTeamName: winner?.teamName, winningBid: winner?.amount };
-  }, [activeAuction, auctionBids, currentTeam.currentRound, currentUser.name, logAuditAction]);
+  }, [activeAuction, auctionBids, currentTeam.currentRound, currentUser.id, currentUser.email, currentUser.name, logAuditAction]);
 
   const placeAuctionBid = useCallback(
     (auctionId: string, amount: number) => {
@@ -1298,11 +1542,23 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
 
       setAuctionBids((prev) => [bid, ...prev]);
+
+      commandSync.dispatch('PLACE_BID', {
+        auctionId,
+        amount,
+        teamId: currentTeamId,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: currentTeamId,
+        role: currentRole as any,
+      });
+
       realtimeBus.emit('AUCTION_BID_RECEIVED', { bid }, currentUser.name);
       logAuditAction('BID_SUBMITTED', auctionId, `Placed sealed bid of ₹${amount.toLocaleString('en-IN')}`);
       return { success: true, message: `Sealed bid of ₹${amount.toLocaleString('en-IN')} submitted!` };
     },
-    [activeAuction, getBalance, currentTeamId, currentTeam.name, currentUser.name, logAuditAction]
+    [activeAuction, getBalance, currentTeamId, currentTeam.name, currentUser.id, currentUser.email, currentUser.name, currentRole, logAuditAction]
   );
 
   // Trade Desk
@@ -1326,11 +1582,24 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
 
       setTrades((prev) => [offer, ...prev]);
+
+      commandSync.dispatch('PROPOSE_TRADE', {
+        fromTeamId: currentTeamId,
+        toTeamId,
+        itemSku,
+        requestedCashAmount: requestedCash,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: currentTeamId,
+        role: currentRole as any,
+      });
+
       realtimeBus.emit('TRADE_PROPOSED', { trade: offer }, currentUser.name);
       logAuditAction('TRADE_PROPOSED', toTeamId, `Offered ${invItem.name} for ₹${requestedCash.toLocaleString('en-IN')}`);
       return { success: true, message: `Trade offer sent to ${toTeam?.name || toTeamId}!` };
     },
-    [teams, inventory, currentTeamId, currentTeam.name, currentUser.name, logAuditAction]
+    [teams, inventory, currentTeamId, currentTeam.name, currentUser.id, currentUser.email, currentUser.name, currentRole, logAuditAction]
   );
 
   const acceptTrade = useCallback(
@@ -1382,11 +1651,20 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         prev.map((t) => (t.id === tradeId ? { ...t, status: 'ACCEPTED', completedAt: new Date().toISOString() } : t))
       );
 
+      commandSync.dispatch('ACCEPT_TRADE', {
+        tradeId,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        teamId: currentTeamId,
+        role: currentRole as any,
+      });
+
       realtimeBus.emit('TRADE_COMMITTED', { tradeId }, currentUser.name);
       logAuditAction('TRADE_COMMITTED', tradeId, `Completed trade between ${trade.fromTeamName} and ${trade.toTeamName}`);
       return { success: true, message: 'Trade completed atomically! Funds and inventory exchanged.' };
     },
-    [trades, currentTeam.currentRound, currentUser.id, currentUser.name, currentRole, logAuditAction]
+    [trades, currentTeam.currentRound, currentUser.id, currentUser.email, currentUser.name, currentRole, currentTeamId, logAuditAction]
   );
 
   // Judge scoring
@@ -1402,10 +1680,19 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         submittedAt: new Date().toISOString(),
       };
       setJudgeScores((prev) => [newScore, ...prev]);
+
+      commandSync.dispatch('SUBMIT_JUDGE_SCORE', {
+        ...score,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        role: 'JUDGE',
+      });
+
       realtimeBus.emit('SCORE_SUBMITTED', { score: newScore }, currentUser.name);
       logAuditAction('SCORE_SUBMITTED', score.teamId, `Judge ${score.judgeName} scored team ${score.teamId}: ${score.totalScore}/100`, 'ADMIN');
     },
-    [currentUser.name, logAuditAction]
+    [currentUser.id, currentUser.email, currentUser.name, logAuditAction]
   );
 
   const recalculateFloorScores = useCallback(() => {
@@ -1444,15 +1731,27 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         timestamp: new Date().toISOString(),
       };
       setAnnouncements((prev) => [ann, ...prev]);
+
+      commandSync.dispatch('ANNOUNCE', {
+        title,
+        content,
+        type,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        role: 'ADMIN',
+      });
+
       realtimeBus.emit('ANNOUNCEMENT_BROADCAST', { announcement: ann }, currentUser.name);
       logAuditAction('ANNOUNCEMENT_POSTED', title, content, 'ADMIN');
     },
-    [currentUser.name, logAuditAction]
+    [currentUser.id, currentUser.email, currentUser.name, logAuditAction]
   );
 
   // Marshal Reissue Role
   const reissueRoleToDevice = useCallback(
     (teamId: string, role: SimulationRole, targetDisplayName: string) => {
+      const newDeviceId = 'dev-token-' + role.toLowerCase() + '-' + Date.now();
       setTeams((prev) =>
         prev.map((team) => {
           if (team.id === teamId) {
@@ -1461,7 +1760,7 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
                 return {
                   ...m,
                   displayName: targetDisplayName,
-                  deviceToken: 'dev-token-' + role.toLowerCase() + '-' + Date.now(),
+                  deviceToken: newDeviceId,
                   lastActiveAt: new Date().toISOString(),
                 };
               }
@@ -1473,11 +1772,22 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         })
       );
 
+      commandSync.dispatch('REISSUE_DEVICE_ROLE', {
+        teamId,
+        role,
+        newDeviceId,
+        targetDisplayName,
+      }, {
+        userId: currentUser.id,
+        userEmail: currentUser.email,
+        role: 'MARSHAL',
+      });
+
       realtimeBus.emit('ROLE_REASSIGNED', { teamId, role, targetDisplayName }, currentUser.name);
       logAuditAction('ROLE_REASSIGNED', `${teamId}/${role}`, `Marshal reissued role ${role} to ${targetDisplayName}`, 'MARSHAL');
       return true;
     },
-    [currentUser.name, logAuditAction]
+    [currentUser.id, currentUser.email, currentUser.name, logAuditAction]
   );
 
   // Lockdown
@@ -1489,9 +1799,18 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       'Official server clock has closed all transactions. Financial mutations, market purchases, and trade desk are frozen.',
       'LOCKDOWN'
     );
+
+    commandSync.dispatch('LOCKDOWN', {
+      active: true,
+    }, {
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      role: 'ADMIN',
+    });
+
     realtimeBus.emit('LOCKDOWN_TRIGGERED', {}, currentUser.name);
     logAuditAction('LOCKDOWN_STARTED', 'ALL', 'Lockdown started room-wide', 'ADMIN');
-  }, [addAnnouncement, currentUser.name, logAuditAction]);
+  }, [addAnnouncement, currentUser.id, currentUser.email, currentUser.name, logAuditAction]);
 
   // Rehearsal One-Click Reset & Reseed
   const resetAndReseedSimulation = useCallback(() => {
@@ -1525,9 +1844,15 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       },
     ]);
 
+    commandSync.dispatch('RESET_SIMULATION', {}, {
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      role: 'ADMIN',
+    });
+
     realtimeBus.emit('SIMULATION_RESET', {}, currentUser.name);
     logAuditAction('EVENT_RESET_RESEEDED', 'ALL_SYSTEMS', '1-Click Rehearsal Reset & Reseed executed successfully', 'ADMIN');
-  }, [currentUser.name, logAuditAction]);
+  }, [currentUser.id, currentUser.email, currentUser.name, logAuditAction]);
 
   // Snapshotting
   const createSnapshot = useCallback(() => {
@@ -1545,28 +1870,46 @@ export const SimulationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       floorScores,
       auditLogs,
     };
+
+    commandSync.dispatch('CREATE_SNAPSHOT', {
+      name: 'Client Snapshot ' + new Date().toLocaleTimeString(),
+    }, {
+      userId: currentUser.id,
+      userEmail: currentUser.email,
+      role: 'ADMIN',
+    });
+
     return JSON.stringify(snapshot, null, 2);
-  }, [eventStatus, eventConfig, teams, ledger, marketItems, inventory, crisisCards, canvas, judgeScores, floorScores, auditLogs]);
+  }, [eventStatus, eventConfig, teams, ledger, marketItems, inventory, crisisCards, canvas, judgeScores, floorScores, auditLogs, currentUser.id, currentUser.email]);
 
   const restoreSnapshot = useCallback(
     (snapshotJson: string) => {
       try {
         const data = JSON.parse(snapshotJson);
+        if (data.eventStatus) setEventStatusState(data.eventStatus);
         if (data.teams) setTeams(data.teams);
         if (data.ledger) setLedger(data.ledger);
         if (data.marketItems) setMarketItems(data.marketItems);
         if (data.inventory) setInventory(data.inventory);
+        if (data.crisisCards) setCrisisCards(data.crisisCards);
         if (data.canvas) setCanvas(data.canvas);
-        if (data.eventStatus) setEventStatusState(data.eventStatus);
-        if (data.eventConfig) setEventConfig(data.eventConfig);
-        realtimeBus.emit('EVENT_STATE_CHANGED', { status: data.eventStatus }, currentUser.name);
-        logAuditAction('SNAPSHOT_RESTORED', 'SYSTEM', `Restored snapshot from ${data.timestamp}`, 'ADMIN');
+
+        commandSync.dispatch('RESTORE_SNAPSHOT', {
+          snapshotData: data,
+        }, {
+          userId: currentUser.id,
+          userEmail: currentUser.email,
+          role: 'ADMIN',
+        });
+
+        logAuditAction('SNAPSHOT_RESTORED', 'SYSTEM', 'Restored simulation state from snapshot', 'ADMIN');
         return true;
-      } catch {
+      } catch (e) {
+        console.error('Failed to parse snapshot JSON', e);
         return false;
       }
     },
-    [currentUser.name, logAuditAction]
+    [currentUser.id, currentUser.email, logAuditAction]
   );
 
   const switchUser = useCallback((user: CodeScrietUser, role: SimulationRole | 'ADMIN' | 'JUDGE' | 'MARSHAL' | 'PUBLIC') => {

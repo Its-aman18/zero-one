@@ -116,7 +116,10 @@ export type ItemCategory =
   | 'Infrastructure'
   | 'Product'
   | 'Growth'
-  | 'Defensive';
+  | 'Defensive'
+  | 'TECH'
+  | 'AUCTION_ASSET'
+  | string;
 
 export interface MarketItem {
   sku: string;
@@ -398,4 +401,115 @@ export interface AdminApplication {
   reviewedByEmail?: string;
   rejectionReason?: string;
 }
+
+// ============================================================================
+// COMMAND & EVENT INFRASTRUCTURE TYPES
+// ============================================================================
+
+export type CommandType =
+  | 'AUTHENTICATE_SESSION'
+  | 'CLAIM_TEAM'
+  | 'CLAIM_ROLE'
+  | 'BIND_DEVICE'
+  | 'REISSUE_DEVICE_ROLE'
+  | 'START_EVENT'
+  | 'START_ROUND'
+  | 'END_ROUND'
+  | 'CHANGE_EVENT_STATE'
+  | 'PROPOSE_PURCHASE'
+  | 'APPROVE_PURCHASE'
+  | 'REJECT_PURCHASE'
+  | 'REVERSE_PURCHASE'
+  | 'SUBMIT_CANVAS'
+  | 'SUBMIT_ARTIFACT'
+  | 'DISPATCH_CRISIS'
+  | 'ACKNOWLEDGE_CRISIS'
+  | 'SUBMIT_CRISIS_RESPONSE'
+  | 'RESOLVE_CRISIS'
+  | 'OPEN_AUCTION'
+  | 'PLACE_BID'
+  | 'CLOSE_AUCTION'
+  | 'PROPOSE_TRADE'
+  | 'ACCEPT_TRADE'
+  | 'REJECT_TRADE'
+  | 'CANCEL_TRADE'
+  | 'ASSIGN_JUDGE'
+  | 'SUBMIT_JUDGE_SCORE'
+  | 'ANNOUNCE'
+  | 'LOCKDOWN'
+  | 'REVEAL_RESULTS'
+  | 'UPDATE_MARKET_PRICE'
+  | 'ADJUST_STOCK'
+  | 'ADD_MARKET_ITEM'
+  | 'MANUAL_LEDGER_ADJUSTMENT'
+  | 'GRANT_LOAN'
+  | 'CREATE_SNAPSHOT'
+  | 'RESTORE_SNAPSHOT'
+  | 'RESET_SIMULATION';
+
+export type CommandStatus =
+  | 'PENDING'
+  | 'SENT'
+  | 'ACCEPTED'
+  | 'REJECTED'
+  | 'CONFLICT'
+  | 'RETRY';
+
+export interface Command<T = any> {
+  commandId: string;
+  deviceId: string;
+  userId: string;
+  userEmail?: string;
+  teamId?: string;
+  role?: SimulationRole | 'ADMIN' | 'SUPER_ADMIN' | 'JUDGE' | 'MARSHAL' | 'PUBLIC';
+  type: CommandType;
+  payload: T;
+  clientCreatedAt: string;
+  attemptCount: number;
+  status: CommandStatus;
+  error?: string;
+}
+
+export interface EventFact<T = any> {
+  id: string;
+  sequence: number;
+  commandId?: string;
+  type: string;
+  payload: T;
+  actor: string;
+  role?: string;
+  teamId?: string;
+  timestamp: string;
+  serverTimestamp: number;
+}
+
+export interface CommandExecutionResult {
+  success: boolean;
+  commandId: string;
+  eventId?: string;
+  sequence?: number;
+  code?: string;
+  message?: string;
+  data?: any;
+  retryable?: boolean;
+  idempotentReplay?: boolean;
+  error?: {
+    code: string;
+    message: string;
+    commandId?: string;
+  };
+  currentState?: Partial<AuthoritativeServerStateSummary>;
+}
+
+export interface AuthoritativeServerStateSummary {
+  eventStatus: EventStatus;
+  serverClock: {
+    timeRemainingSeconds: number;
+    isClockRunning: boolean;
+    lastTickTimestamp: number;
+  };
+  isLockdownActive: boolean;
+  latestSequence: number;
+}
+
 

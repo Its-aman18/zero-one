@@ -1,0 +1,1688 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 7: connection URLs live in prisma.config.ts (migrate → DIRECT_URL,
+  // non-pooler) and in the runtime driver adapter (lib/prisma.ts → DATABASE_URL,
+  // pooler). url/directUrl are no longer permitted in the schema block.
+}
+
+// Migration Notes:
+// - DIRECT_URL should use the non-pooler connection string to avoid P1002 advisory lock errors
+// - DATABASE_URL can use the pooler for application queries
+
+model User {
+  id               String   @id @default(uuid())
+  name             String
+  email            String   @unique
+  avatar           String?
+  oauthProvider    String?  @map("oauth_provider")
+  oauthId          String?  @map("oauth_id")
+  role             Role     @default(USER)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  password         String?
+  bio              String?
+  githubUrl        String?  @map("github_url")
+  linkedinUrl      String?  @map("linkedin_url")
+  twitterUrl       String?  @map("twitter_url")
+  websiteUrl       String?  @map("website_url")
+  branch           String?
+  course           String?
+  phone            String?
+  profileCompleted Boolean  @default(false) @map("profile_completed")
+  year             String?
+
+  // Login telemetry (admin-deep-control)
+  lastLoginAt DateTime? @map("last_login_at")
+  lastLoginIp String?   @map("last_login_ip")
+
+  // Auth invalidation — JWT carries tokenVersion claim; force-logout increments this.
+  // Legacy tokens (no claim) are treated as version 0 and only rejected when DB > 0.
+  tokenVersion Int @default(0) @map("token_version")
+
+  // Materialized QOTD streak — consecutive published-and-not-held QOTD days the user solved on.
+  // Days without a published QOTD are transparent (neither extend nor break the streak).
+  currentStreak   Int       @default(0) @map("current_streak")
+  longestStreak   Int       @default(0) @map("longest_streak")
+  longestStreakAt DateTime? @map("longest_streak_at")
+
+  // Soft delete — auth middleware rejects rows with isDeleted=true.
+  isDeleted Boolean   @default(false) @map("is_deleted")
+  deletedAt DateTime? @map("deleted_at")
+  deletedBy String?   @map("deleted_by")
+
+  // Admin-initiated password reset — hashed token + expiry. Consumer endpoint is /api/auth/reset-password.
+  passwordResetToken     String?   @unique @map("password_reset_token")
+  passwordResetExpiresAt DateTime? @map("password_reset_expires_at")
+
+  // Notification bell unread-cutoff — items in /api/notifications older than this are 'read'.
+  // Single timestamp avoids an unbounded per-notification join on the free-tier 512 MB box.
+  notificationsReadAt DateTime? @map("notifications_read_at")
+
+  // Most recent streak-share card (Cloudinary URL), set when the user shares their
+  // streak to LinkedIn. Served as the og:image of GET /share/streak/:userId so the
+  // card shows in the post preview. See ShareStreakButton + the share route.
+  streakCardUrl String? @map("streak_card_url")
+
+  announcements           Announcement[]
+  registrations           EventRegistration[]
+  hiringApplications      HiringApplication[]
+  qotdSubmissions         QOTDSubmission[]
+  networkProfile          NetworkProfile?
+  teamMember              TeamMember?
+  // Quiz relations
+  createdQuizzes          Quiz[]
+  quizParticipants        QuizParticipant[]
+  quizAnswers             QuizAnswer[]
+  // Certificate relations
+  certificates            Certificate[]
+  // Team registration relations
+  ledTeams                EventTeam[]                   @relation("teamLeader")
+  teamMemberships         EventTeamMember[]             @relation("teamMemberships")
+  competitionSubmissions  CompetitionSubmission[]
+  competitionAutoSaves    CompetitionAutoSave[]
+  competitionParticipantStates CompetitionParticipantState[]
+  competitionViolations   CompetitionViolation[]
+  competitionClarifications CompetitionClarification[]
+  createdPolls            Poll[]
+  pollVotes               PollVote[]
+  pollFeedback            PollFeedback[]
+  eventsCreated           Event[]                       @relation("eventCreator")
+  invitationsReceived     EventInvitation[]             @relation("InvitationInvitee")
+  invitationsSent         EventInvitation[]             @relation("InvitationInviter")
+  qotdsCreated            QOTD[]                        @relation("qotdCreator")
+  auditLogs               AuditLog[]
+  executions              Execution[]
+  snippets                Snippet[]
+  problemSheets           ProblemSheet[]      @relation("ProblemSheetCreator") // S-09
+  playgroundPrefs         UserPlaygroundPrefs?
+  playgroundDailyUsage    PlaygroundDailyUsage[]
+  playgroundLimitResets   PlaygroundLimitReset[]
+  playgroundResetRequests PlaygroundLimitResetRequest[]
+  problemsCreated         Problem[]                     @relation("ProblemsCreated")
+  problemSubmissions      ProblemSubmission[]
+  problemCounters         ProblemSubmissionCounter[]
+  blocks                  UserBlock[]
+  uploadedImages          UploadedImage[]
+  notificationsAuthored   NotificationFeed[]            @relation("NotificationAuthor")
+
+  @@index([role, createdAt(sort: Desc)], map: "users_role_created_at_desc_idx")
+  @@index([lastLoginAt(sort: Desc)], map: "users_last_login_at_desc_idx")
+  @@index([isDeleted, role], map: "users_is_deleted_role_idx")
+  @@map("users")
+}
+
+// Settings — singleton (id="default"). Flag usage status (audited 2026-05-13):
+//   ACTIVE: hiring* (JoinUsPage), email*Enabled (utils/email.ts category guard),
+//     showQOTD/showLeaderboard/showNetwork (dashboard + layout gates),
+//     certificatesEnabled/playgroundEnabled/competitionEnabled/problemsEnabled
+//     (feature gates), playgroundDailyLimit, emailTestingMode/emailTestRecipients,
+//     attendanceJwtSecret/indexNowKey (security env), mailingEnabled, hiringEnabled.
+//   ADMIN-UI-ONLY: showAchievements, show_tech_blogs — toggled in AdminSettings
+//     but no downstream reader. Kept for future feature gating.
+//   Do NOT drop any column without a follow-up code change.
+model Settings {
+  id                       String   @id @default("default")
+  clubName                 String   @default("code.scriet") @map("club_name")
+  clubEmail                String   @default("contact@codescriet.com") @map("club_email")
+  clubDescription          String   @default("Building tomorrow's problem solvers through collaborative learning and hands-on coding experiences.") @map("club_description")
+  registrationOpen         Boolean  @default(true) @map("registration_open")
+  maxEventsPerUser         Int      @default(5) @map("max_events_per_user")
+  announcementsEnabled     Boolean  @default(true) @map("announcements_enabled")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+  showAchievements         Boolean  @default(true) @map("show_achievements")
+  showLeaderboard          Boolean  @default(false) @map("show_leaderboard")
+  showQOTD                 Boolean  @default(true) @map("show_qotd")
+  discordUrl               String?  @map("discord_url")
+  githubUrl                String?  @map("github_url")
+  instagramUrl             String?  @map("instagram_url")
+  linkedinUrl              String?  @map("linkedin_url")
+  twitterUrl               String?  @map("twitter_url")
+  whatsappUrl              String?  @map("whatsapp_url")
+  // Public contact page channels. contactPhone drives the "Call us" / WhatsApp
+  // card; contactEmails is an admin-managed list of { label, email } shown
+  // alongside the primary clubEmail so multiple departments can be reached.
+  contactPhone             String?  @map("contact_phone")
+  contactEmails            Json?    @map("contact_emails")
+  hiringEnabled            Boolean  @default(true) @map("hiring_enabled")
+  emailAnnouncementBody    String?  @map("email_announcement_body")
+  emailEventBody           String?  @map("email_event_body")
+  emailFooterText          String?  @map("email_footer_text")
+  emailWelcomeBody         String?  @map("email_welcome_body")
+  show_tech_blogs          Boolean  @default(true)
+  showNetwork              Boolean  @default(true) @map("show_network")
+  emailNetworkVerifiedBody String?  @map("email_network_verified_body")
+  emailNetworkRejectedBody String?  @map("email_network_rejected_body")
+
+  // Per-team hiring toggles (only apply when hiringEnabled is true)
+  hiringTechnical   Boolean @default(true) @map("hiring_technical")
+  hiringDsaChamps   Boolean @default(true) @map("hiring_dsa_champs")
+  hiringDesigning   Boolean @default(true) @map("hiring_designing")
+  hiringSocialMedia Boolean @default(true) @map("hiring_social_media")
+  hiringManagement  Boolean @default(true) @map("hiring_management")
+  // A11: current hiring season label stamped onto new applications. Admins bump
+  // it to re-open hiring (e.g. "2026-autumn"); previous applicants can apply again.
+  hiringCycle       String  @default("2026") @map("hiring_cycle")
+
+  // Mailing system toggle
+  mailingEnabled Boolean @default(true) @map("mailing_enabled")
+
+  // Feature toggles (President / Super Admin only)
+  certificatesEnabled  Boolean @default(true) @map("certificates_enabled")
+  playgroundEnabled    Boolean @default(true) @map("playground_enabled")
+  playgroundDailyLimit Int     @default(100) @map("playground_daily_limit")
+
+  // Email notification category toggles
+  emailWelcomeEnabled       Boolean @default(true) @map("email_welcome_enabled")
+  emailEventCreationEnabled Boolean @default(true) @map("email_event_creation_enabled")
+  emailRegistrationEnabled  Boolean @default(true) @map("email_registration_enabled")
+  emailAnnouncementEnabled  Boolean @default(true) @map("email_announcement_enabled")
+  emailCertificateEnabled   Boolean @default(true) @map("email_certificate_enabled")
+  emailReminderEnabled      Boolean @default(true) @map("email_reminder_enabled")
+  emailInvitationEnabled    Boolean @default(true) @map("email_invitation_enabled")
+  emailPasswordResetEnabled Boolean @default(true) @map("email_password_reset_enabled")
+  emailPasswordResetBody    String? @map("email_password_reset_body")
+
+  // Email testing mode
+  emailTestingMode    Boolean @default(false) @map("email_testing_mode")
+  emailTestRecipients String? @map("email_test_recipients")
+
+  // Privileged security env references (super admin / president only)
+  attendanceJwtSecret String? @map("attendance_jwt_secret")
+  indexNowKey         String? @map("indexnow_key")
+
+  // Competition feature toggle
+  competitionEnabled Boolean @default(false) @map("competition_enabled")
+  problemsEnabled    Boolean @default(false) @map("problems_enabled")
+  // Contest plagiarism similarity check (Phase H4) — off by default; review-only.
+  plagiarismCheckEnabled Boolean @default(false) @map("plagiarism_check_enabled")
+
+  // Dashboard v2 — admin-controlled accent token applied to <html data-accent="…">.
+  // Allowed values: rust | teal | indigo | violet | mint | mono. Default rust.
+  accentColor String @default("rust") @map("accent_color")
+
+  // Admin-selected primary code-execution provider for the judge + playground.
+  // Allowed values: wandbox | godbolt. Default wandbox. The CF Worker tries this
+  // provider first and transparently falls back to the other on an infra failure
+  // (or a language godbolt can't run, e.g. Node/JS). See CLAUDE.md → Execution Resilience.
+  codeExecutionProvider String @default("wandbox") @map("code_execution_provider")
+
+  // Show "via CodeBox (local) / Wandbox / godbolt" badge on code-run outputs.
+  // Display-only flag (APIs always return the provider); toggled by
+  // President/super-admin via PATCH /settings/:key (that route is gated).
+  showExecutionSource Boolean @default(true) @map("show_execution_source")
+
+  // S4/S6 runtime toggles (admin Settings UI). Hot paths read these via the
+  // SYNCHRONOUS in-process settings-cache peek (utils/settingsCache.ts) — never a
+  // per-event DB query — so toggling costs nothing at reveal/snapshot time and
+  // takes effect within the 5-min cache TTL (instantly after a settings PATCH,
+  // which invalidates the cache). Env vars QUIZ_FOLD_RANK_IN_RESULT /
+  // ENABLE_QUIZ_SNAPSHOT remain as emergency force-ON overrides.
+  quizFoldRankInResult Boolean @default(false) @map("quiz_fold_rank_in_result")
+  quizSnapshotEnabled  Boolean @default(false) @map("quiz_snapshot_enabled")
+
+  // Site launch date — drives the "months since inception" stat on /about.
+  siteLaunchDate DateTime @default("2026-01-01T00:00:00Z") @map("site_launch_date")
+
+  @@map("settings")
+}
+
+model Event {
+  id                    String      @id @default(uuid())
+  title                 String
+  description           String
+  status                EventStatus @default(UPCOMING)
+  startDate             DateTime    @map("start_date")
+  endDate               DateTime?   @map("end_date")
+  location              String?
+  capacity              Int?
+  imageUrl              String?     @map("image_url")
+  createdBy             String      @map("created_by")
+  createdAt             DateTime    @default(now()) @map("created_at")
+  updatedAt             DateTime    @updatedAt @map("updated_at")
+  eventType             String?     @map("event_type")
+  prerequisites         String?
+  registrationEndDate   DateTime?   @map("registration_end_date")
+  registrationStartDate DateTime?   @map("registration_start_date")
+  registrationFields    Json?       @map("registration_fields")
+  venue                 String?
+  agenda                String?
+  faqs                  Json?
+  featured              Boolean     @default(false)
+  highlights            String?
+  imageGallery          Json?       @map("image_gallery")
+  learningOutcomes      String?     @map("learning_outcomes")
+  resources             Json?
+  shortDescription      String?     @map("short_description") @db.VarChar(300)
+  speakers              Json?
+  tags                  String[]    @default([])
+  targetAudience        String?     @map("target_audience")
+  videoUrl              String?     @map("video_url")
+  slug                  String      @unique
+  allowLateRegistration Boolean     @default(false) @map("allow_late_registration")
+  remindersEnabled      Boolean     @default(true) @map("reminders_enabled")
+  eventDays             Int         @default(1) @map("event_days")
+  dayLabels             Json?       @map("day_labels")
+  // S-10: per-event reservation marker — set once when the post-event feedback
+  // request goes out, so the 6h scheduler tick never re-sends.
+  feedbackSentAt        DateTime?   @map("feedback_sent_at")
+  // When the event's combined competition final standings were published to the public
+  // (Phase F). Null = draft (admin-only). Additive.
+  competitionFinalPublishedAt DateTime? @map("competition_final_published_at")
+
+  // Team registration fields
+  teamRegistration Boolean @default(false) @map("team_registration")
+  teamMinSize      Int     @default(1) @map("team_min_size")
+  teamMaxSize      Int     @default(4) @map("team_max_size")
+
+  registrations     EventRegistration[]
+  invitations       EventInvitation[]
+  certificates      Certificate[]
+  teams             EventTeam[]
+  competitionRounds CompetitionRound[]
+  feedbackPolls     Poll[]              @relation("EventFeedbackPoll") // S-10
+  creator           User                @relation("eventCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([status, startDate])
+  @@index([startDate])
+  @@index([featured])
+  @@map("events")
+}
+
+model EventRegistration {
+  id                   String           @id @default(uuid())
+  userId               String           @map("user_id")
+  eventId              String           @map("event_id")
+  timestamp            DateTime         @default(now())
+  customFieldResponses Json?            @map("custom_field_responses")
+  reminderSentAt       DateTime?        @map("reminder_sent_at")
+  registrationType     RegistrationType @default(PARTICIPANT) @map("registration_type")
+
+  // Attendance fields
+  attendanceToken String?   @unique @map("attendance_token")
+  attended        Boolean   @default(false)
+  scannedAt       DateTime? @map("scanned_at")
+  manualOverride  Boolean   @default(false) @map("manual_override")
+
+  // Set when this registration was created retroactively for a past event (the
+  // `timestamp` above is then the backdated moment, not the real insert time).
+  // Plain-string actor snapshot, same rule as scannedBy/issuedBy.
+  backdatedBy String? @map("backdated_by")
+
+  event          Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamMember     EventTeamMember?
+  invitation     EventInvitation? @relation("InvitationToRegistration")
+  dayAttendances DayAttendance[]
+
+  @@unique([userId, eventId])
+  @@index([eventId, attended])
+  @@index([eventId, registrationType, attended])
+  @@index([eventId, timestamp(sort: Desc)], map: "event_registrations_event_id_timestamp_desc_idx")
+  @@index([userId, timestamp])
+  @@index([timestamp])
+  @@index([reminderSentAt])
+  @@map("event_registrations")
+}
+
+model EventInvitation {
+  id      String @id @default(uuid())
+  eventId String @map("event_id")
+  event   Event  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  inviteeUserId String? @map("invitee_user_id")
+  inviteeUser   User?   @relation("InvitationInvitee", fields: [inviteeUserId], references: [id], onDelete: Cascade)
+  inviteeEmail  String? @map("invitee_email") @db.VarChar(255)
+
+  inviteeNameSnapshot        String? @map("invitee_name_snapshot") @db.VarChar(200)
+  inviteeDesignationSnapshot String? @map("invitee_designation_snapshot") @db.VarChar(200)
+  inviteeCompanySnapshot     String? @map("invitee_company_snapshot") @db.VarChar(200)
+
+  role          String           @default("Guest") @db.VarChar(50)
+  customMessage String?          @map("custom_message") @db.Text
+  status        InvitationStatus @default(PENDING)
+
+  certificateEnabled Boolean  @default(true) @map("certificate_enabled")
+  certificateType    CertType @default(SPEAKER) @map("certificate_type")
+
+  invitedById       String    @map("invited_by_id")
+  invitedBy         User      @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: Restrict)
+  invitedAt         DateTime  @default(now()) @map("invited_at")
+  respondedAt       DateTime? @map("responded_at")
+  // Set when this invitation was reconstructed retroactively for a past event
+  // (invitedAt/respondedAt then hold the backdated moments; createdAt stays real).
+  backdatedBy       String?   @map("backdated_by")
+  revokedAt         DateTime? @map("revoked_at")
+  emailSent         Boolean   @default(false) @map("email_sent")
+  emailSentAt       DateTime? @map("email_sent_at")
+  lastEmailResentAt DateTime? @map("last_email_resent_at")
+
+  registrationId String?            @unique @map("registration_id")
+  registration   EventRegistration? @relation("InvitationToRegistration", fields: [registrationId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([eventId, inviteeUserId])
+  @@index([inviteeUserId, status])
+  @@index([inviteeEmail, status])
+  @@index([eventId, status])
+  @@map("event_invitations")
+}
+
+model DayAttendance {
+  id             String            @id @default(uuid())
+  registrationId String            @map("registration_id")
+  registration   EventRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+  dayNumber      Int               @map("day_number")
+  attended       Boolean           @default(false)
+  scannedAt      DateTime?         @map("scanned_at")
+  scannedBy      String?           @map("scanned_by")
+  manualOverride Boolean           @default(false) @map("manual_override")
+  // Set when scannedAt was backdated beyond the normal 24h edit window. createdAt
+  // stays the real row-write time, so the pair reveals a retroactive mark.
+  backdatedBy    String?           @map("backdated_by")
+  createdAt      DateTime          @default(now()) @map("created_at")
+
+  @@unique([registrationId, dayNumber])
+  @@map("day_attendances")
+}
+
+// Team Registration Models
+model EventTeam {
+  id         String   @id @default(uuid())
+  eventId    String   @map("event_id")
+  teamName   String   @map("team_name") @db.VarChar(100)
+  inviteCode String   @unique @map("invite_code") @db.VarChar(8)
+  leaderId   String   @map("leader_id")
+  isLocked   Boolean  @default(false) @map("is_locked")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  event                  Event                   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  leader                 User                    @relation("teamLeader", fields: [leaderId], references: [id], onDelete: Restrict)
+  members                EventTeamMember[]
+  competitionSubmissions CompetitionSubmission[]
+  competitionAutoSaves   CompetitionAutoSave[]
+
+  @@unique([eventId, teamName])
+  @@index([leaderId])
+  @@map("event_teams")
+}
+
+model EventTeamMember {
+  id             String   @id @default(uuid())
+  teamId         String   @map("team_id")
+  userId         String   @map("user_id")
+  registrationId String   @unique @map("registration_id")
+  role           EventTeamMemberRole @default(MEMBER)
+  joinedAt       DateTime @default(now()) @map("joined_at")
+
+  team         EventTeam         @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user         User              @relation("teamMemberships", fields: [userId], references: [id], onDelete: Cascade)
+  registration EventRegistration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@map("event_team_members")
+}
+
+model CompetitionRound {
+  id               String                      @id @default(uuid())
+  eventId          String                      @map("event_id")
+  title            String                      @db.VarChar(200)
+  description      String?                     @db.Text
+  duration         Int
+  status           CompetitionStatus           @default(DRAFT)
+  roundType        CompetitionRoundType        @default(IMAGE_TARGET) @map("round_type")
+  participantScope CompetitionParticipantScope @default(ALL) @map("participant_scope")
+  leadersOnly      Boolean                     @default(false) @map("leaders_only")
+  allowedTeamIds   String[]                    @default([]) @map("allowed_team_ids")
+  targetImageUrl   String?                     @map("target_image_url")
+  // Contest config (Phase A redesign). finalWeight = this round's raw weight in the
+  // event-final aggregation (normalized at compute). difficultyWeights = optional
+  // {EASY,MEDIUM,HARD} presets that seed per-problem weights in the admin UI; the raw
+  // per-problem weight still lives on CompetitionRoundProblem.points.
+  finalWeight              Float                      @default(1) @map("final_weight")
+  proctored                Boolean                    @default(false)
+  penaltyModel             CompetitionPenaltyModel    @default(BEST_SCORE) @map("penalty_model")
+  leaderboardFreezeMinutes Int?                       @map("leaderboard_freeze_minutes")
+  difficultyWeights        Json?                      @map("difficulty_weights")
+  // How a TEAM's score folds its members on a DSA round (admin choice). Ignored for
+  // solo events (per-user). BEST_PER_PROBLEM = best member score per problem then weight;
+  // AVERAGE = mean of members' round scores; BEST_MEMBER = top member's round score.
+  teamAggregation          TeamAggregation            @default(BEST_PER_PROBLEM) @map("team_aggregation")
+  startedAt        DateTime?                   @map("started_at")
+  lockedAt         DateTime?                   @map("locked_at")
+  createdAt        DateTime                    @default(now()) @map("created_at")
+  updatedAt        DateTime                    @updatedAt @map("updated_at")
+
+  event            Event                          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  submissions      CompetitionSubmission[]
+  autoSaves        CompetitionAutoSave[]
+  problems         CompetitionRoundProblem[]
+  participantState CompetitionParticipantState[]
+  violations       CompetitionViolation[]
+  clarifications   CompetitionClarification[]
+  plagiarismFlags  CompetitionPlagiarismFlag[]
+
+  @@index([eventId])
+  @@index([status, startedAt])
+  @@map("competition_rounds")
+}
+
+model CompetitionSubmission {
+  id           String   @id @default(uuid())
+  roundId      String   @map("round_id")
+  teamId       String?  @map("team_id")
+  userId       String   @map("user_id")
+  code         String   @db.Text
+  submittedAt  DateTime @default(now()) @map("submitted_at")
+  isAutoSubmit Boolean  @default(false) @map("is_auto_submit")
+  score        Float?
+  rank         Int?
+  adminNotes   String?  @map("admin_notes") @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  round CompetitionRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  team  EventTeam?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // PostgreSQL treats NULL as distinct in unique constraints, so this only applies to team submissions.
+  @@unique([roundId, teamId])
+  @@unique([roundId, userId])
+  @@index([teamId])
+  @@index([rank, score])
+  @@map("competition_submissions")
+}
+
+model CompetitionAutoSave {
+  id      String   @id @default(uuid())
+  roundId String   @map("round_id")
+  teamId  String?  @map("team_id")
+  userId  String   @map("user_id")
+  code    String   @db.Text
+  savedAt DateTime @default(now()) @map("saved_at")
+
+  round CompetitionRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  team  EventTeam?       @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, userId])
+  @@index([teamId])
+  @@map("competition_auto_saves")
+}
+
+// Per-participant contest state (Phase A redesign). One row per [roundId, userId].
+// Powers proctor lock (server-enforced) + the live admin monitor (online via
+// lastSeenAt heartbeat, violation count, lock state). DB-backed + prunable — no
+// in-memory growth with participant count.
+model CompetitionParticipantState {
+  id              String    @id @default(uuid())
+  roundId         String    @map("round_id")
+  userId          String    @map("user_id")
+  locked          Boolean   @default(false)
+  lockReason      String?   @map("lock_reason")
+  lockedAt        DateTime? @map("locked_at")
+  unlockedBy      String?   @map("unlocked_by")
+  unlockedAt      DateTime? @map("unlocked_at")
+  violationCount  Int       @default(0) @map("violation_count")
+  lastViolationAt DateTime? @map("last_violation_at")
+  lastSeenAt      DateTime? @map("last_seen_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  round CompetitionRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, userId])
+  @@index([roundId, locked])
+  @@index([roundId, lastSeenAt])
+  @@map("competition_participant_states")
+}
+
+// Append-only proctoring violation log (drives the admin violation feed).
+model CompetitionViolation {
+  id      String                   @id @default(uuid())
+  roundId String                   @map("round_id")
+  userId  String                   @map("user_id")
+  kind    CompetitionViolationKind
+  detail  String?
+  at      DateTime                 @default(now())
+
+  round CompetitionRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  user  User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([roundId, at])
+  @@index([roundId, userId])
+  @@map("competition_violations")
+}
+
+// Admin-broadcast clarifications/announcements during a live round; contestants poll.
+model CompetitionClarification {
+  id        String   @id @default(uuid())
+  roundId   String   @map("round_id")
+  message   String   @db.Text
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  round   CompetitionRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  creator User             @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([roundId, createdAt])
+  @@map("competition_clarifications")
+}
+
+// Plagiarism similarity flags (Phase H4) — review-only. Each row is a suspicious pair
+// for one problem in one round; an admin reviews + marks REVIEWED/DISMISSED. Never
+// auto-penalizes. User ids/names are plain snapshots (survive deletion; flags prune
+// with the round). Computed off-box on the playground server (or inline fallback).
+model CompetitionPlagiarismFlag {
+  id         String               @id @default(uuid())
+  roundId    String               @map("round_id")
+  problemId  String               @map("problem_id")
+  userAId    String               @map("user_a_id")
+  userAName  String               @map("user_a_name")
+  userBId    String               @map("user_b_id")
+  userBName  String               @map("user_b_name")
+  similarity Float
+  status     PlagiarismFlagStatus @default(PENDING)
+  reviewedBy String?              @map("reviewed_by")
+  reviewedAt DateTime?            @map("reviewed_at")
+  createdAt  DateTime             @default(now()) @map("created_at")
+
+  round CompetitionRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, problemId, userAId, userBId])
+  @@index([roundId, status])
+  @@map("competition_plagiarism_flags")
+}
+
+model Announcement {
+  id               String               @id @default(uuid())
+  title            String
+  body             String
+  priority         AnnouncementPriority @default(MEDIUM)
+  createdBy        String               @map("created_by")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+  attachments      Json?
+  expiresAt        DateTime?            @map("expires_at")
+  featured         Boolean              @default(false)
+  imageGallery     Json?                @map("image_gallery")
+  imageUrl         String?              @map("image_url")
+  links            Json?
+  pinned           Boolean              @default(false)
+  shortDescription String?              @map("short_description") @db.VarChar(300)
+  slug             String               @unique
+  tags             String[]             @default([])
+  creator          User                 @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([createdAt])
+  @@index([featured])
+  @@index([pinned(sort: Desc), createdAt(sort: Desc)], map: "announcements_pinned_created_at_desc_idx")
+  @@index([expiresAt, pinned(sort: Desc), createdAt(sort: Desc)], map: "announcements_expires_pinned_created_idx")
+  @@map("announcements")
+}
+
+model Poll {
+  id                   String         @id @default(uuid())
+  question             String         @db.VarChar(500)
+  description          String?        @db.Text
+  slug                 String         @unique
+  allowMultipleChoices Boolean        @default(false) @map("allow_multiple_choices")
+  allowVoteChange      Boolean        @default(true) @map("allow_vote_change")
+  isAnonymous          Boolean        @default(false) @map("is_anonymous")
+  deadline             DateTime?
+  isPublished          Boolean        @default(true) @map("is_published")
+  createdBy            String         @map("created_by")
+  // S-10: optional link making this poll the post-event feedback poll for an event.
+  eventId              String?        @map("event_id")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
+  creator              User           @relation(fields: [createdBy], references: [id], onDelete: Restrict)
+  event                Event?         @relation("EventFeedbackPoll", fields: [eventId], references: [id], onDelete: SetNull)
+  options              PollOption[]
+  votes                PollVote[]
+  feedbackEntries      PollFeedback[]
+
+  @@index([createdBy])
+  @@index([isPublished, createdAt(sort: Desc)], map: "polls_published_created_at_desc_idx")
+  @@index([deadline, isPublished], map: "polls_deadline_published_idx")
+  @@index([eventId])
+  @@map("polls")
+}
+
+model PollOption {
+  id         String              @id @default(uuid())
+  pollId     String              @map("poll_id")
+  text       String              @db.VarChar(240)
+  sortOrder  Int                 @map("sort_order")
+  createdAt  DateTime            @default(now()) @map("created_at")
+  poll       Poll                @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  selections PollVoteSelection[]
+
+  @@unique([pollId, sortOrder])
+  @@map("poll_options")
+}
+
+model PollVote {
+  id         String              @id @default(uuid())
+  pollId     String              @map("poll_id")
+  userId     String              @map("user_id")
+  createdAt  DateTime            @default(now()) @map("created_at")
+  updatedAt  DateTime            @updatedAt @map("updated_at")
+  poll       Poll                @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  selections PollVoteSelection[]
+
+  @@unique([pollId, userId])
+  @@index([userId])
+  @@map("poll_votes")
+}
+
+model PollVoteSelection {
+  voteId   String     @map("vote_id")
+  optionId String     @map("option_id")
+  vote     PollVote   @relation(fields: [voteId], references: [id], onDelete: Cascade)
+  option   PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+
+  @@id([voteId, optionId])
+  @@index([optionId])
+  @@map("poll_vote_selections")
+}
+
+model PollFeedback {
+  id        String   @id @default(uuid())
+  pollId    String   @map("poll_id")
+  userId    String   @map("user_id")
+  message   String   @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  poll      Poll     @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId])
+  @@index([pollId, createdAt(sort: Desc)], map: "poll_feedback_poll_created_at_desc_idx")
+  @@index([userId])
+  @@map("poll_feedback")
+}
+
+model TeamMember {
+  id           String   @id @default(uuid())
+  name         String
+  role         String
+  team         String
+  imageUrl     String   @map("image_url")
+  github       String?
+  linkedin     String?
+  twitter      String?
+  order        Int      @default(0)
+  createdAt    DateTime @default(now()) @map("created_at")
+  instagram    String?
+  // Link to User account
+  userId       String?  @unique @map("user_id")
+  user         User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  // URL-friendly slug for profile page
+  slug         String?  @unique
+  // Legacy slugs kept for backward-compatible URL resolution
+  legacySlugs  String[] @default([]) @map("legacy_slugs")
+  // Rich content fields for personal page
+  bio          String?  @db.Text
+  vision       String?  @db.Text
+  story        String?  @db.Text
+  expertise    String?  @db.Text
+  achievements String?  @db.Text
+  website      String?
+  // Credits given to this team member
+  credits      Credit[]
+
+  @@index([team, order])
+  @@index([team, order, createdAt], map: "team_members_team_order_created_at_idx")
+  @@index([order, createdAt], map: "team_members_order_created_at_idx")
+  @@map("team_members")
+}
+
+model Achievement {
+  id               String   @id @default(uuid())
+  title            String
+  slug             String   @unique
+  description      String
+  content          String?  @db.Text
+  shortDescription String?  @map("short_description") @db.VarChar(300)
+  eventName        String?  @map("event_name")
+  // Free-form attribution text (e.g., person/team/institution), intentionally not a FK.
+  achievedBy       String   @map("achieved_by")
+  imageUrl         String?  @map("image_url")
+  imageGallery     Json?    @map("image_gallery")
+  date             DateTime
+  tags             String[] @default([])
+  featured         Boolean  @default(false)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([date])
+  @@index([featured, date(sort: Desc)], map: "achievements_featured_date_desc_idx")
+  @@map("achievements")
+}
+
+model QOTD {
+  id          String           @id @default(uuid())
+  date        DateTime         @unique
+  question    String
+  problemLink String           @map("problem_link")
+  difficulty  Difficulty
+  problemId   String?          @map("problem_id")
+  createdById String?          @map("created_by_id")
+  createdAt   DateTime         @default(now()) @map("created_at")
+  isPublished Boolean          @default(false) @map("is_published")
+  publishAt   DateTime?        @map("publish_at")
+  publishedAt DateTime?        @map("published_at")
+  heldBy      String?          @map("held_by")
+  holdReason  String?          @map("hold_reason")
+  // Admin "reopen a past QOTD" — when set, the QOTD accepts submissions again via a
+  // private signed link even though its date has passed (streak/marks count normally).
+  // null = closed/never-reopened. reopenedBy is a plain-string actor snapshot.
+  reopenedAt  DateTime?        @map("reopened_at")
+  reopenedBy  String?          @map("reopened_by")
+  creator     User?            @relation("qotdCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  problem     Problem?         @relation(fields: [problemId], references: [id], onDelete: SetNull)
+  submissions QOTDSubmission[]
+
+  @@index([createdById])
+  @@index([problemId])
+  @@index([isPublished, date])
+  @@map("qotd")
+}
+
+model QOTDSubmission {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  qotdId    String   @map("qotd_id")
+  timestamp DateTime @default(now())
+  qotd      QOTD     @relation(fields: [qotdId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, qotdId])
+  @@index([qotdId])
+  @@index([userId, timestamp])
+  @@index([timestamp])
+  @@map("qotd_submissions")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  userId    String?  @map("user_id")
+  action    String
+  entity    String
+  entityId  String?  @map("entity_id")
+  metadata  Json?
+  timestamp DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, timestamp])
+  @@index([entity, timestamp(sort: Desc)], map: "audit_logs_entity_timestamp_desc_idx")
+  @@index([action, timestamp(sort: Desc)], map: "audit_logs_action_timestamp_desc_idx")
+  // Serves the default unfiltered admin browse (ORDER BY timestamp DESC LIMIT n)
+  // and future retention pruning — the composite indexes above can't.
+  @@index([timestamp(sort: Desc)], map: "audit_logs_timestamp_desc_idx")
+  // Serves the notification bell's per-user system-events read
+  // (routes/notifications.ts — entity + entityId filter ordered by timestamp).
+  @@index([entity, entityId, timestamp])
+  @@map("audit_logs")
+}
+
+// Per-feature block enforced by the `requireNotBlocked(feature)` middleware
+// (apps/api/src/middleware/blocks.ts) and the JWT auth hook in the /quiz socket
+// namespace. Lazy expiry on read — no background job.
+model UserBlock {
+  id        String           @id @default(uuid())
+  userId    String           @map("user_id")
+  feature   UserBlockFeature
+  blockedAt DateTime         @default(now()) @map("blocked_at")
+  blockedBy String           @map("blocked_by")
+  reason    String?          @db.Text
+  expiresAt DateTime?        @map("expires_at")
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, feature])
+  @@index([feature, expiresAt])
+  @@map("user_blocks")
+}
+
+model HiringApplication {
+  id           String            @id @default(uuid())
+  name         String
+  email        String
+  phone        String?
+  department   String
+  year         String
+  skills       String?
+  applyingRole ApplyingRole      @map("applying_role")
+  status       ApplicationStatus @default(PENDING)
+  // A11: hiring season. One application per email PER cycle (was one ever).
+  // Stamped from Settings.hiringCycle at apply time; existing rows backfill to '2026'.
+  cycle        String            @default("2026")
+  userId       String?           @map("user_id")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
+  user         User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([email, cycle])
+  @@index([status, createdAt])
+  @@index([applyingRole, createdAt])
+  @@index([cycle, createdAt])
+  @@index([userId])
+  @@map("hiring_applications")
+}
+
+enum Role {
+  PUBLIC
+  USER
+  CORE_MEMBER
+  ADMIN
+  PRESIDENT
+  MEMBER
+  NETWORK
+}
+
+enum UserBlockFeature {
+  EVENT
+  PLAYGROUND
+  QOTD
+  QUIZ
+  NETWORK
+}
+
+enum EventStatus {
+  UPCOMING
+  ONGOING
+  PAST
+}
+
+enum RegistrationType {
+  PARTICIPANT
+  GUEST
+}
+
+// A4: was a varchar(10) "LEADER"/"MEMBER" the app policed in JS.
+enum EventTeamMemberRole {
+  LEADER
+  MEMBER
+}
+
+// A4: shared by Problem.difficulty + QOTD.difficulty (the frontend already
+// locks EASY/MEDIUM/HARD via z.enum on every write path).
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  REVOKED
+}
+
+enum AnnouncementPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ApplyingRole {
+  TECHNICAL
+  DSA_CHAMPS
+  DESIGNING
+  SOCIAL_MEDIA
+  MANAGEMENT
+}
+
+enum ApplicationStatus {
+  PENDING
+  INTERVIEW_SCHEDULED
+  SELECTED
+  REJECTED
+}
+
+enum CompetitionStatus {
+  DRAFT
+  ACTIVE
+  LOCKED
+  JUDGING
+  FINISHED
+}
+
+enum CompetitionParticipantScope {
+  ALL
+  SELECTED_TEAMS
+}
+
+// Contest ranking model (Phase A redesign). BEST_SCORE = score desc + earliest
+// submission tie-break (today's behaviour). ICPC = score desc, then total penalty asc
+// (wrong attempts × 20min + minutes-to-first-AC across solved problems).
+enum CompetitionPenaltyModel {
+  BEST_SCORE
+  ICPC
+}
+
+enum CompetitionViolationKind {
+  BLUR
+  HIDDEN
+  CLICK_OUT
+  FULLSCREEN_EXIT
+  COPY_PASTE
+  OTHER
+}
+
+// How a team's DSA round score folds its members (Phase H1, admin choice per round).
+enum TeamAggregation {
+  BEST_PER_PROBLEM
+  AVERAGE
+  BEST_MEMBER
+}
+
+enum PlagiarismFlagStatus {
+  PENDING
+  REVIEWED
+  DISMISSED
+}
+
+// Network Feature - Industry Professionals & Alumni
+model NetworkProfile {
+  id     String @id @default(cuid())
+  userId String @unique @map("user_id")
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // URL slug (name-XXXX format for unique public URLs)
+  slug        String?  @unique
+  // Legacy slugs kept for backward-compatible URL resolution
+  legacySlugs String[] @default([]) @map("legacy_slugs")
+
+  // Professional details
+  fullName     String  @map("full_name")
+  designation  String // e.g. "CEO", "Senior Engineer"
+  company      String
+  industry     String // e.g. "FinTech", "EdTech", "Product"
+  bio          String? @db.Text
+  profilePhoto String? @map("profile_photo")
+  phone        String? // Private — only for admin contact
+
+  // Social/professional links
+  linkedinUsername String? @map("linkedin_username")
+  twitterUsername  String? @map("twitter_username")
+  githubUsername   String? @map("github_username")
+  personalWebsite  String? @map("personal_website")
+
+  // Connection context
+  connectionType NetworkConnectionType @map("connection_type")
+  connectionNote String?               @map("connection_note") @db.Text
+  connectedSince Int?                  @map("connected_since") // Year they first connected
+
+  // Alumni-specific fields (only relevant when connectionType is ALUMNI)
+  passoutYear     Int?    @map("passout_year") // Graduation year
+  degree          String? // e.g. "B.Tech", "M.Tech", "MCA"
+  branch          String? // e.g. "Computer Science", "Electronics"
+  rollNumber      String? @map("roll_number") // Optional college roll
+  achievements    String? @db.Text // Notable achievements
+  currentLocation String? @map("current_location") // City, Country
+
+  // Rich personal profile fields (supports Markdown/HTML)
+  vision    String? @db.Text // Personal/professional vision
+  story     String? @db.Text // Background/journey story
+  expertise String? @db.Text // Skills and expertise areas
+
+  // Admin-managed rich content (markdown)
+  adminNotes String? @map("admin_notes") @db.Text
+
+  // Event participation history (JSON array of events they attended/hosted)
+  // Format: [{ title: string, date: string, description?: string, type?: string, link?: string }]
+  events Json? @default("[]")
+
+  // Featured flag for homepage showcase
+  isFeatured Boolean @default(false) @map("is_featured")
+
+  // Verification
+  status          NetworkStatus @default(PENDING)
+  verifiedAt      DateTime?     @map("verified_at")
+  verifiedBy      String?       @map("verified_by")
+  rejectionReason String?       @map("rejection_reason")
+
+  // Visibility
+  isPublic     Boolean @default(true) @map("is_public")
+  displayOrder Int     @default(0) @map("display_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([connectionType])
+  @@index([industry])
+  @@index([displayOrder])
+  @@index([isFeatured])
+  @@index([passoutYear])
+  @@index([status, isPublic, isFeatured(sort: Desc), displayOrder, createdAt(sort: Desc)], map: "network_profiles_public_feed_idx")
+  @@index([status, isPublic, industry], map: "network_profiles_status_public_industry_idx")
+  @@map("network_profiles")
+}
+
+// ──────────────── Live Quiz System ────────────────
+
+model Quiz {
+  id                   String            @id @default(uuid())
+  title                String            @db.VarChar(255)
+  description          String?           @db.Text
+  joinCode             String?           @unique @map("join_code") @db.VarChar(6)
+  pin                  String?           @unique @db.VarChar(6)
+  pinActive            Boolean           @default(true) @map("pin_active")
+  createdBy            String            @map("created_by")
+  creator              User              @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+  status               QuizStatus        @default(DRAFT)
+  currentQuestionIndex Int               @default(-1) @map("current_question_index")
+  questionCount        Int               @default(0) @map("question_count")
+  totalParticipants    Int               @default(0) @map("total_participants")
+  startedAt            DateTime?         @map("started_at")
+  endedAt              DateTime?         @map("ended_at")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
+  questions            QuizQuestion[]
+  participants         QuizParticipant[]
+  answers              QuizAnswer[]
+
+  @@index([status], map: "idx_quizzes_status")
+  @@index([createdBy], map: "idx_quizzes_created_by")
+  @@map("quizzes")
+}
+
+model QuizQuestion {
+  id                 String           @id @default(uuid())
+  quizId             String           @map("quiz_id")
+  quiz               Quiz             @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  position           Int
+  questionText       String           @map("question_text") @db.Text
+  questionType       QuizQuestionType @default(MCQ) @map("question_type")
+  options            Json? // string array for mcq/true_false/poll
+  correctAnswer      String?          @map("correct_answer")
+  timeLimitSeconds   Int              @default(20) @map("time_limit_seconds")
+  points             Int              @default(100)
+  mediaUrl           String?          @map("media_url")
+  totalAnswers       Int              @default(0) @map("total_answers")
+  correctCount       Int              @default(0) @map("correct_count")
+  avgAnswerTimeMs    Int              @default(0) @map("avg_answer_time_ms")
+  answerDistribution Json?            @map("answer_distribution")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  answers            QuizAnswer[]
+
+  // A5: unique, not just indexed — PATCH /api/quiz/:quizId delete-and-recreates
+  // questions, so a concurrent double-PATCH could otherwise persist duplicate
+  // positions and the position-ordered UI would show a skipped/duplicated question.
+  @@unique([quizId, position], map: "idx_quiz_questions_quiz_position")
+  @@map("quiz_questions")
+}
+
+model QuizParticipant {
+  id                String   @id @default(uuid())
+  quizId            String   @map("quiz_id")
+  quiz              Quiz     @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  userId            String   @map("user_id")
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName       String   @map("display_name") @db.VarChar(100)
+  joinedAt          DateTime @default(now()) @map("joined_at")
+  finalScore        Int      @default(0) @map("final_score")
+  finalRank         Int?     @map("final_rank")
+  correctCount      Int      @default(0) @map("correct_count")
+  totalAnswerTimeMs BigInt   @default(0) @map("total_answer_time_ms")
+  joinedMidQuiz     Boolean  @default(false) @map("joined_mid_quiz")
+  questionsAnswered Int      @default(0) @map("questions_answered")
+
+  @@unique([quizId, userId])
+  @@index([userId], map: "idx_quiz_participants_user_id")
+  @@map("quiz_participants")
+}
+
+model QuizAnswer {
+  id              String       @id @default(uuid())
+  quizId          String       @map("quiz_id")
+  quiz            Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  questionId      String       @map("question_id")
+  question        QuizQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  userId          String       @map("user_id")
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answerSubmitted String?      @map("answer_submitted")
+  isCorrect       Boolean?     @map("is_correct")
+  pointsAwarded   Int          @default(0) @map("points_awarded")
+  answerTimeMs    Int          @map("answer_time_ms")
+  submittedAt     DateTime     @default(now()) @map("submitted_at")
+
+  @@unique([questionId, userId])
+  @@index([questionId], map: "idx_quiz_answers_question_id")
+  @@index([userId], map: "idx_quiz_answers_user_id")
+  // Per-quiz, per-user lookups (leaderboard / "my answers in this quiz") are
+  // hot paths after every question advance — the composite avoids a full scan.
+  @@index([quizId, userId], map: "idx_quiz_answers_quiz_user")
+  @@map("quiz_answers")
+}
+
+enum QuizStatus {
+  DRAFT
+  WAITING
+  ACTIVE
+  FINISHED
+  ABANDONED
+}
+
+enum QuizQuestionType {
+  MCQ
+  TRUE_FALSE
+  SHORT_ANSWER
+  POLL
+  RATING
+  MULTI_SELECT
+  OPEN_ENDED
+}
+
+enum NetworkConnectionType {
+  GUEST_SPEAKER
+  GMEET_SESSION
+  EVENT_JUDGE
+  MENTOR
+  INDUSTRY_PARTNER
+  ALUMNI
+  OTHER
+}
+
+enum NetworkStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+// ──────────────── Playground ────────────────
+
+model Execution {
+  id         String          @id @default(uuid())
+  userId     String          @map("user_id")
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  language   String
+  code       String?         @db.Text
+  outputText String?         @map("output_text") @db.Text
+  executedAt DateTime        @default(now()) @map("executed_at")
+  durationMs Int?            @map("duration_ms")
+  status     ExecutionStatus @default(SUCCESS)
+
+  @@index([userId, executedAt])
+  @@index([executedAt])
+  @@map("executions")
+}
+
+model UserPlaygroundPrefs {
+  userId       String @id @map("user_id")
+  user         User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  theme        String @default("dark")
+  fontSize     Int    @default(14)
+  keybinding   String @default("default") // 'vim' | 'emacs' | 'default'
+  lastLanguage String @default("python") @map("last_language")
+
+  @@map("user_playground_prefs")
+}
+
+model Snippet {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title      String
+  language   String
+  code       String   @db.Text
+  isPublic   Boolean  @default(false) @map("is_public")
+  shareToken String?  @unique @map("share_token")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@index([userId, createdAt])
+  @@index([userId, updatedAt])
+  @@map("snippets")
+}
+
+model PlaygroundDailyUsage {
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  usageDate DateTime @map("usage_date") @db.Date
+  count     Int      @default(0)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@id([userId, usageDate])
+  @@index([usageDate], map: "pdu_usage_date_idx")
+  @@map("playground_daily_usage")
+}
+
+model PlaygroundLimitReset {
+  id      String   @id @default(uuid())
+  userId  String   @map("user_id")
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resetBy String   @map("reset_by")
+  resetAt DateTime @default(now()) @map("reset_at")
+  note    String?
+
+  @@index([userId], map: "plr_user_id_idx")
+  @@map("playground_limit_resets")
+}
+
+model PlaygroundLimitResetRequest {
+  id        String                       @id @default(uuid())
+  userId    String                       @map("user_id")
+  user      User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note      String?                      @db.Text
+  status    PlaygroundResetRequestStatus @default(PENDING)
+  decidedBy String?                      @map("decided_by")
+  decidedAt DateTime?                    @map("decided_at")
+  createdAt DateTime                     @default(now()) @map("created_at")
+
+  @@index([status, createdAt])
+  @@index([userId, status])
+  @@map("playground_limit_reset_requests")
+}
+
+model Problem {
+  id                 String            @id @default(uuid())
+  slug               String            @unique
+  title              String            @db.VarChar(200)
+  body               String            @db.Text
+  difficulty         Difficulty
+  tags               String[]
+  allowedLanguages   ProblemLanguage[] @map("allowed_languages")
+  timeLimitMs        Int               @default(2000) @map("time_limit_ms")
+  defaultSubmitCap   Int               @default(5) @map("default_submit_cap")
+  sampleTests        Json              @map("sample_tests")
+  hiddenTests        Json              @map("hidden_tests")
+  referenceSolution  String?           @map("reference_solution") @db.Text
+  referenceLanguage  ProblemLanguage?  @map("reference_language")
+  isPublished        Boolean           @default(false) @map("is_published")
+  createdBy          String            @map("created_by")
+  creator            User              @relation("ProblemsCreated", fields: [createdBy], references: [id], onDelete: Restrict)
+  testCasesUpdatedAt DateTime          @default(now()) @map("test_cases_updated_at")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+
+  submissions       ProblemSubmission[]
+  counters          ProblemSubmissionCounter[]
+  qotds             QOTD[]
+  competitionRounds CompetitionRoundProblem[]
+  sheetItems        ProblemSheetItem[] // S-09
+
+  @@index([isPublished, difficulty])
+  @@index([createdAt])
+  @@index([createdBy])
+  @@map("problems")
+}
+
+// S-09 — curated, ordered problem sheets ("topic ladders"). Authored by
+// CORE_MEMBER+, surfaced in the dashboard Practice tab. Per-member progress is
+// computed live from ProblemSubmission (no per-user state → no free-tier cost).
+model ProblemSheet {
+  id          String             @id @default(uuid())
+  slug        String             @unique
+  title       String
+  description String?            @db.Text
+  isPublished Boolean            @default(false) @map("is_published")
+  createdBy   String             @map("created_by")
+  createdAt   DateTime           @default(now()) @map("created_at")
+  updatedAt   DateTime           @updatedAt @map("updated_at")
+  creator     User               @relation("ProblemSheetCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  items       ProblemSheetItem[]
+
+  @@index([isPublished, createdAt(sort: Desc)])
+  @@index([createdBy])
+  @@map("problem_sheets")
+}
+
+model ProblemSheetItem {
+  id        String       @id @default(uuid())
+  sheetId   String       @map("sheet_id")
+  problemId String       @map("problem_id")
+  order     Int          @default(0)
+  sheet     ProblemSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  problem   Problem      @relation(fields: [problemId], references: [id], onDelete: Cascade)
+
+  @@unique([sheetId, problemId])
+  @@index([sheetId, order])
+  @@map("problem_sheet_items")
+}
+
+model ProblemSubmission {
+  id              String             @id @default(uuid())
+  userId          String             @map("user_id")
+  user            User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId       String             @map("problem_id")
+  problem         Problem            @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  contextType     ProblemContextType @map("context_type")
+  contextKey      String             @map("context_key")
+  language        ProblemLanguage
+  code            String             @db.Text
+  verdict         SubmissionVerdict
+  score           Int
+  passedCount     Int                @map("passed_count")
+  totalCount      Int                @map("total_count")
+  perTestVerdicts Json               @map("per_test_verdicts")
+  runtimeMs       Int?               @map("runtime_ms")
+  compilerOutput  String?            @map("compiler_output") @db.Text
+  manualOverride  Boolean            @default(false) @map("manual_override")
+  overrideNotes   String?            @map("override_notes") @db.Text
+  activeMs        Int?               @map("active_ms")
+  needsReview     Boolean            @default(false) @map("needs_review")
+  // A reopened-past-QOTD solve is judged but held: verdict stays PENDING and this
+  // flag is set until an admin accepts it, at which point verdict → ACCEPTED and
+  // streak/leaderboard recompute. PENDING never counts on any ACCEPTED-filtered
+  // leaderboard or streak, so the hold needs no extra query guards.
+  reopenPending   Boolean            @default(false) @map("reopen_pending")
+  appealedAt      DateTime?          @map("appealed_at")
+  appealNote      String?            @map("appeal_note") @db.Text
+  // CONTEST-only penalty bookkeeping (ICPC model). wrongAttempts counts non-ACCEPTED
+  // judged submits before the first AC; solvedAt stamps the first AC. Null/0 elsewhere.
+  contestWrongAttempts Int           @default(0) @map("contest_wrong_attempts")
+  contestSolvedAt DateTime?          @map("contest_solved_at")
+  submittedAt     DateTime           @default(now()) @map("submitted_at")
+  updatedAt       DateTime           @updatedAt @map("updated_at")
+
+  @@unique([userId, problemId, contextType, contextKey])
+  @@index([problemId, contextType, contextKey])
+  @@index([contextType, contextKey])
+  @@index([userId, submittedAt])
+  @@index([needsReview, updatedAt])
+  // Serves the admin dashboard's AC-rate · 7d groupBy (routes/stats.ts — a bare
+  // submittedAt range scan the composite indexes above can't satisfy).
+  @@index([submittedAt])
+  @@map("problem_submissions")
+}
+
+model ProblemSubmissionCounter {
+  id             String             @id @default(uuid())
+  userId         String             @map("user_id")
+  user           User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId      String             @map("problem_id")
+  problem        Problem            @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  contextType    ProblemContextType @map("context_type")
+  contextKey     String             @map("context_key")
+  count          Int                @default(0)
+  capOverride    Int?               @map("cap_override")
+  lastResetAt    DateTime?          @map("last_reset_at")
+  updatedAt      DateTime           @updatedAt @map("updated_at")
+  pendingRequest Boolean            @default(false) @map("pending_request")
+  requestedAt    DateTime?          @map("requested_at")
+  requestNote    String?            @map("request_note")
+  lastGrantedBy  String?            @map("last_granted_by")
+  lastGrantedAt  DateTime?          @map("last_granted_at")
+
+  @@unique([userId, problemId, contextType, contextKey])
+  @@index([problemId, contextType, contextKey])
+  @@index([contextType, pendingRequest])
+  @@map("problem_submission_counters")
+}
+
+model CompetitionRoundProblem {
+  id           String           @id @default(uuid())
+  roundId      String           @map("round_id")
+  round        CompetitionRound @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  problemId    String           @map("problem_id")
+  problem      Problem          @relation(fields: [problemId], references: [id], onDelete: Restrict)
+  displayOrder Int              @default(0) @map("display_order")
+  points       Int              @default(100)
+
+  @@unique([roundId, problemId])
+  @@unique([roundId, displayOrder])
+  @@index([problemId])
+  @@map("competition_round_problems")
+}
+
+enum ExecutionStatus {
+  SUCCESS
+  ERROR
+  TIMEOUT
+}
+
+enum SubmissionVerdict {
+  PENDING
+  ACCEPTED
+  WRONG_ANSWER
+  TIME_LIMIT_EXCEEDED
+  RUNTIME_ERROR
+  COMPILATION_ERROR
+  JUDGE_ERROR
+}
+
+enum ProblemContextType {
+  QOTD
+  CONTEST
+  PRACTICE
+}
+
+enum CompetitionRoundType {
+  IMAGE_TARGET
+  DSA
+}
+
+enum ProblemLanguage {
+  PYTHON
+  JAVASCRIPT
+  CPP
+  C
+  JAVA
+}
+
+enum PlaygroundResetRequestStatus {
+  PENDING
+  GRANTED
+  DENIED
+}
+
+// ──────────────── Signatories ────────────────
+
+model Signatory {
+  id           String   @id @default(cuid())
+  name         String
+  title        String   @default("Club President")
+  signatureUrl String?  @map("signature_url") // Cloudinary URL or base64 data URI of transparent-bg PNG
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  certificatesAsPrimary Certificate[] @relation("PrimarySignatory")
+  certificatesAsFaculty Certificate[] @relation("FacultySignatory")
+
+  @@map("signatories")
+}
+
+// ──────────────── Certificate System ────────────────
+
+enum CertType {
+  PARTICIPATION
+  COMPLETION
+  WINNER
+  SPEAKER
+  APPRECIATION
+}
+
+// A4: certificate render template + email delivery template. Lowercase members
+// preserve the exact strings already stored (gold/dark/white/emerald and
+// default/faculty_distribution) so the USING cast is a no-op rename.
+enum CertTemplate {
+  gold
+  dark
+  white
+  emerald
+}
+
+enum CertEmailTemplate {
+  default
+  faculty_distribution
+}
+
+model Certificate {
+  id     String @id @default(cuid())
+  certId String @unique @map("cert_id") // Public human-readable ID e.g. "ABCD-EFGH-IJKL"
+
+  recipientId String? @map("recipient_id")
+  recipient   User?   @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  recipientName  String @map("recipient_name")
+  recipientEmail String @map("recipient_email")
+
+  eventId   String? @map("event_id")
+  event     Event?  @relation(fields: [eventId], references: [id], onDelete: SetNull)
+  eventName String  @map("event_name")
+
+  type        CertType
+  position    String? // e.g. "1st Place" — only for WINNER type
+  domain      String? // e.g. "Web Development"
+  description String? // Optional description rendered on the certificate
+  teamName    String? @map("team_name") // WINNER team certs — persisted so regeneration can restore it (graceful via schema-fallback if not yet migrated)
+
+  template CertTemplate @default(gold)
+
+  pdfUrl String? @map("pdf_url")
+
+  // Signatory — snapshot denormalized at generation time for historical accuracy
+  signatoryId       String?    @map("signatory_id")
+  signatory         Signatory? @relation("PrimarySignatory", fields: [signatoryId], references: [id], onDelete: SetNull)
+  signatoryName     String?    @map("signatory_name") // denormalized
+  signatoryTitle    String?    @map("signatory_title") // denormalized
+  signatoryImageUrl String?    @map("signatory_image_url") // denormalized (Cloudinary URL)
+
+  // Faculty signatory — optional second signer
+  facultySignatoryId       String?    @map("faculty_signatory_id")
+  facultySignatory         Signatory? @relation("FacultySignatory", fields: [facultySignatoryId], references: [id], onDelete: SetNull)
+  facultyName              String?    @map("faculty_name")
+  facultyTitle             String?    @map("faculty_title")
+  facultySignatoryImageUrl String?    @map("faculty_signatory_image_url")
+
+  issuedBy String   @map("issued_by")
+  // The certificate's EFFECTIVE date — what the recipient, the public verify page,
+  // the email and LinkedIn all see. Normally "now", but PRES/SA may backdate it so a
+  // certificate issued today for a long-past event carries that event's date.
+  // `createdAt` below always holds the real row-write time; never conflate the two.
+  issuedAt DateTime @default(now()) @map("issued_at")
+
+  // Set only when issuedAt was deliberately backdated. Plain-string actor snapshot
+  // (audit A3 rule) — it records who backdated this at that moment and must survive
+  // the actor's deletion. Null ⇒ issuedAt is the real issuance time.
+  backdatedBy     String? @map("backdated_by")
+  backdateReason  String? @map("backdate_reason")
+
+  emailSent   Boolean   @default(false) @map("email_sent")
+  emailSentAt DateTime? @map("email_sent_at")
+
+  lastEmailResentAt DateTime? @map("last_email_resent_at")
+
+  // Email delivery template chosen at generation time, so resend replays the same one.
+  emailTemplate   CertEmailTemplate @default(default) @map("email_template")
+  emailSignerName String? @map("email_signer_name") // signer name for the faculty_distribution email
+
+  isRevoked     Boolean   @default(false) @map("is_revoked")
+  revokedAt     DateTime? @map("revoked_at")
+  revokedBy     String?   @map("revoked_by")
+  revokedReason String?   @map("revoked_reason")
+
+  viewCount Int @default(0) @map("view_count")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([recipientEmail, eventId, type], name: "unique_cert_per_event")
+  @@index([recipientId])
+  @@index([recipientEmail])
+  @@index([eventId, issuedAt])
+  @@map("certificates")
+}
+
+model Credit {
+  id           String      @id @default(uuid())
+  title        String
+  description  String?     @db.Text
+  category     String
+  teamMemberId String?     @map("team_member_id")
+  teamMember   TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: SetNull)
+  order        Int         @default(0)
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  @@index([category, order])
+  @@index([teamMemberId])
+  @@map("credits")
+}
+
+// Dashboard v3 — admin-authored & auto-generated notifications.
+// One row per broadcast. Audience is denormalised onto the row so we never
+// fan out per-user (free-tier safe). The bell menu unions these into its feed
+// alongside the auto-derived items (invitations / certs / quiz / audit).
+model NotificationFeed {
+  id              String               @id @default(uuid())
+  source          NotificationSource   @default(ADMIN)
+  audience        NotificationAudience @default(ALL)
+  // Roles to target when audience = CUSTOM. JSON: ["USER","NETWORK", ...]
+  audienceRoles   Json?                @map("audience_roles")
+  // Specific user IDs to target when audience = CUSTOM. JSON string[].
+  audienceUserIds Json?                @map("audience_user_ids")
+  category        String               @default("system")
+  icon            String               @default("bell")
+  title           String               @db.VarChar(200)
+  body            String?              @db.Text
+  link            String?              @db.VarChar(500)
+  // Optional reference back to the entity that triggered the notification
+  // (e.g. for auto-generated event/problem/announcement broadcasts).
+  refEntity       String?              @map("ref_entity")
+  refEntityId     String?              @map("ref_entity_id")
+  createdById     String?              @map("created_by_id")
+  createdBy       User?                @relation("NotificationAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt       DateTime             @default(now()) @map("created_at")
+  expiresAt       DateTime?            @map("expires_at")
+
+  @@index([createdAt(sort: Desc)])
+  @@index([audience, createdAt(sort: Desc)])
+  @@index([refEntity, refEntityId])
+  @@map("notification_feed")
+}
+
+enum NotificationSource {
+  ADMIN
+  AUTO_EVENT
+  AUTO_ANNOUNCEMENT
+  AUTO_PROBLEM
+  AUTO_QOTD
+  AUTO_QUIZ
+  SYSTEM
+}
+
+enum NotificationAudience {
+  ALL
+  USERS
+  NETWORK
+  ALUMNI
+  NETWORK_AND_ALUMNI
+  ADMIN
+  CORE_MEMBER
+  CUSTOM
+}
+
+// Dashboard v2 — image library record written on every /api/upload/image POST.
+// Powers the upload-history endpoint and the ImageUploadTool gallery.
+model UploadedImage {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url       String
+  publicId  String   @unique @map("public_id")
+  filename  String?
+  bytes     Int?
+  width     Int?
+  height    Int?
+  format    String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("uploaded_images")
+}

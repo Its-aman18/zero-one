@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:engine": "node test_engine.cjs",
+    "test:production": "node test_production_engine.cjs"
   },
   "dependencies": {
     "@types/canvas-confetti": "^1.9.0",
